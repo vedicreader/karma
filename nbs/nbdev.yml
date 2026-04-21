@@ -2,7 +2,7 @@ project:
   output-dir: _docs
 
 website:
-  title: "kosha"
+  title: "koshas"
   site-url: "https://vedicreader.github.io/kosha"
   description: "kosha (कोश) — a treasury of your repo and environment context for coding agents. FTS5 + vector search + call graph, no LLMs required."
   repo-branch: main

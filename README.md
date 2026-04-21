@@ -19,10 +19,10 @@ application.
 
 ``` sh
 # uv (recommended)
-uv add --dev kosha
+uv add --dev koshas
 
 # pip
-pip install --group dev kosha
+pip install --group dev koshas
 ```
 
 ## One-time project setup
@@ -142,11 +142,10 @@ results = k.context('payments page packages:fasthtml,monsterui', limit=15)
 
 ## The structural layer — CodeGraph
 
-`k.graph` is a
-[`CodeGraph`](https://vedicreader.github.io/kosha/graph.html#codegraph)
-backed by `.kosha/graph.db`. After `k.sync()`, the graph covers your
-repo and every indexed package. You can traverse it directly, or let
-`context()` enrich results automatically.
+`k.graph` is a `CodeGraph` backed by `.kosha/graph.db`. After
+`k.sync()`, the graph covers your repo and every indexed package. You
+can traverse it directly, or let `context()` enrich results
+automatically.
 
 ``` python
 # Full structural info for any node

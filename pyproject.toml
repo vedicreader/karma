@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "kosha"
+name = "koshas"
 dynamic = ["version"]
 description = "kosha (कोश) — a treasury of your repo and environment context for coding agents. FTS5 + vector search + call graph, no LLMs required."
 readme = "README.md"
@@ -32,9 +32,14 @@ kosha = "kosha._modidx:d"
 path = "kosha/__init__.py"
 
 [tool.hatch.build.targets.wheel]
-include = ["kosha"]
+packages = ["kosha"]
+
+[tool.hatch.build.targets.sdist]
+include = ["/kosha", "/pyproject.toml", "/README.md"]
 
 [tool.nbdev]
+lib_name = "kosha"
+lib_path = "kosha"
 
 [dependency-groups]
 dev = [
