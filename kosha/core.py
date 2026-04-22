@@ -250,7 +250,7 @@ def update_repo(self:Kosha,
 				files:L=None,     # specific paths to (re)index; None = full sync
                 exts:str=code_exts,
                 efn=embedder,       # embedding function to use for code snippets
-                v=True, # verbose
+                verbose=True, # verbose
 				**kwargs              # extra args forwarded to dir2files
 				):
     'Index or update repo code chunks. Pass files= for incremental update (e.g. from watcher).'
@@ -263,7 +263,7 @@ def update_repo(self:Kosha,
     else: ch,to_remove = L(files).map(Path).partition(lambda f: f.exists() and f.suffix in exts)
     if to_remove: self.code_st.delete_where(where=f'path in ({",".join(to_remove.map(repr))})')
     if not ch: return
-    if v: print(f'syncing files {ch} .....')
+    if verbose: print(f'syncing files {ch} .....')
     o = Path(str(ch[0])).parent
     while has_init(o): o = o.parent
     mod_fn = lambda p, n: '.'.join(list(Path(p).relative_to(o).with_suffix('').parts)+[n])
@@ -276,7 +276,7 @@ def update_repo(self:Kosha,
     own = Path(dir).resolve().name
     rows = [dict(from_module=own, to_pkg=dep, n_files=n) for dep,n in count_imp(ch,own).items() if spec(dep)]
     if rows: self.code_rd.insert_all(rows, replace=True)
-    if v: print('synced repo')
+    if verbose: print('synced repo')
 
 @patch
 def prune_old_versions(self:Kosha, pkg:str):

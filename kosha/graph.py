@@ -454,13 +454,13 @@ def short_paths(self:Kosha):
 
 # %% ../nbs/01_graph.ipynb #6f57bfb4
 @patch
-def sync(self: Kosha, pkgs=None, dir=None, emb=embedder, pyproject=True, depth=1):
+def sync(self: Kosha, pkgs=None, dir=None, emb=embedder, verbose=True) -> 'Kosha':
 	'Sync code store, env store, and code graph. Runs in a daemon thread by default.'
 	dir = dir or self.root
-	pkgs = pkgs or list(env_pkg_versions(pyproject, depth))
-	ts=[bind(self.update_repo, dir=dir, efn=emb), bind(self.update_pkgs, pkgs=pkgs, efn=emb),
-	    bind(self.graph.sync, dir=dir, pkgs=pkgs)]
-	return arun(parallel_async(lambda f: f(), ts))
+	self.update_repo(dir, efn=emb, verbose=verbose)
+	self.update_pkgs(pkgs, efn=emb, verbose=verbose)
+	self.graph.sync(dir=dir, pkgs=pkgs)
+	if verbose: print(f"Synced dir {dir} and pkgs {pkgs} to graph.")
 
 @patch
 def context(self: Kosha,
