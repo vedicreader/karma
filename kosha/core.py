@@ -162,6 +162,7 @@ def has_init(d: Path) -> bool:
 	return (d / '__init__.py').exists() or bool(list(d.glob('__init__*.so')))
 
 # %% ../nbs/00_core.ipynb #cd93d2c15ca33a8d
+_SHRINK_THRESH = 0.8  # alert if sync removes more than this fraction of existing chunks
 os.environ['TOKENIZERS_PARALLELISM']='false'  # to suppress warnings from tokenizers
 @patch
 def nuke(self:Kosha):
@@ -233,7 +234,7 @@ def update_pkg(self:Kosha, pkg:str, embed=True, exts=code_exts, efn=embedder, ve
 	if verbose: print(f'updated pkg: {pkg} with {len(ch)} new/changed chunks, {len(ex)-len(ch)} unchanged, '
 		      f'{len(ex)-len(cont_hash)} removed')
 	after = len(self.env_st(select='id', where=f'package={pkg!r}'))
-	if after < len(ex)*0.8 and len(ex) > 0 and not force: raise ValueError(f'sync would drop {len(ex)-after} chunks; pass force=True')
+	if after < len(ex)*_SHRINK_THRESH and len(ex) > 0 and not force: raise ValueError(f'sync would drop {len(ex)-after} chunks; pass force=True')
 	return self.pkgs.insert(dict(name=pkg, version=v(pkg), summary=_get(doc,'metadata','summary')), ignore=True)
 
 @patch
@@ -297,7 +298,7 @@ def update_repo(self:Kosha,
 	rows = [dict(from_module=own, to_pkg=dep, n_files=n) for dep,n in count_imp(ch,own).items() if spec(dep)]
 	if rows: self.code_rd.insert_all(rows, replace=True)
 	after = len(self.code_st(select='id'))
-	if after < before*0.8 and before > 0 and not force: raise ValueError(f'sync would drop {before-after} chunks; pass force=True')
+	if after < before*_SHRINK_THRESH and before > 0 and not force: raise ValueError(f'sync would drop {before-after} chunks; pass force=True')
 	if verbose: print('synced repo')
 
 @patch
