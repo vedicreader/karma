@@ -2,6 +2,11 @@
 
 <!-- do not remove -->
 
+## 0.0.30
+bump litesearch to fix ann latency bugbug
+
+
+
 ## 0.0.29
 skip folder re, skip file re, find stale files, graph sync optionalstale fixes
 
