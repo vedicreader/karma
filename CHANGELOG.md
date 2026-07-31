@@ -2,6 +2,9 @@
 
 <!-- do not remove -->
 
+## 0.0.31
+bug fix with remove
+
 ## 0.0.30
 bump litesearch to fix ann latency bugbug
 
