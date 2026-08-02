@@ -59,10 +59,19 @@ for r in k.env_context('description of what you want', limit=10):
 | What's a package's real public API? (`__all__` + `@patch`) | `k.public_api('pkg')` |
 | Where do I add new code? (returns `file:line` insertion points) | `k.where_to_add('desc', limit=5)` |
 | Rebuild call graph without re-embedding (e.g. after kosha update) | `k.sync(embed=False)` |
+| What else looks like the code at this line? | `k.similar('path/to/f.py', 42, limit=15)` |
+| Where else did we already do this? (the family, not the top 15) | `k.peers('path/to/f.py', 42)` |
+| What is in this codebase? (labelled map, for orienting) | `k.code_clusters(limit=20)` |
 
 `context(q, graph=True)` is the right default once a task touches more than one module.
-`env_context` is already a semantic similarity search — pass any description, snippet, or
-function name; no separate `similar()` needed.
+`env_context` is already a semantic similarity search over *text* — pass any description, snippet,
+or function name.
+
+`similar` / `peers` / `code_clusters` start from a **location** instead of a string, which is the
+question you actually have with a file open. They reuse the vector already in the index, so no
+model runs. `peers` and `code_clusters` return `AttrDict(hits|clusters, method, note)`: usearch
+needs a tall HNSW graph and refuses to cluster a small index, so both fall back to k-NN and name
+which one answered in `note`. Read it before concluding a repo has no structure.
 
 ## Filter syntax
 
@@ -95,7 +104,8 @@ and where the registration lives, without reading the glue code.
 
 - **MCP server:** if `kosha-mcp` is configured in the host (`claude mcp add kosha -- uv run kosha-mcp`),
   the same operations are available as MCP tools (`status`, `context`, `env_context`, `node_info`,
-  `where_to_add`, ...) — call those directly instead of the in-process API.
+  `where_to_add`, `similar`, `peers`, `code_clusters`, ...) — call those directly instead of the
+  in-process API.
 - **Daemon protocol:** send JSON `{"cmd": "...", "args": {...}}` on stdin. Commands: `sync`,
   `context`, `repo_context`, `env_context`, `ni`, `top_nodes`, `public_api`, `api_call_paths`,
   `status`, `where_to_add`.

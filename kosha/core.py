@@ -454,3 +454,93 @@ def pkg_context(self:Kosha,
 	fq, emb = pre(q, extract_kw=False), self.emb_query(q).tobytes()
 	fn = lambda r: r | dict(metadata=jl(r['metadata'])) if isinstance(r.get('metadata'), str) else r
 	return L(self.envdb.search(fq, emb, ann=True, columns=['content','metadata'], table_name='pkg_store', limit=limit)).map(fn)
+
+# %% ../nbs/00_core.ipynb #50c8f9c5
+def _code_hit(r, kind='ann'):
+    'Flatten a code-store row into a code hit: location, symbol, first source line, distance.'
+    m = r.get('metadata') or {}
+    if isinstance(m, str):
+        try: m = jl(m)
+        except Exception: m = {}
+    return AttrDict(path=r.get('path') or m.get('path') or '', lineno=int(m.get('lineno') or 1),
+                    mod_name=m.get('mod_name') or '', type=m.get('type') or '',
+                    sig=(r.get('content') or '').strip().split('\n')[0][:200],
+                    content=r.get('content') or '', kind=kind, dist=r.get('_dist'))
+
+_SIM_COLS = ['content','path','metadata']
+
+@patch
+def anchor(self:Kosha,
+           path:str,        # file the cursor is in
+           line:int=1       # 1-indexed line
+) -> int | None:
+    '''The code-store rowid of the chunk covering `path:line`, or None.
+
+    Chunks are AST nodes, so "covering" means the last chunk that starts at or before `line`.
+    An absolute path is tried first and a path *suffix* second, so a caller holding a repo-relative
+    path (an editor, a diff, a traceback) does not have to know how the index spelled it.'''
+    p = Path(path)
+    cand = str(p.resolve()) if p.exists() else str(p)
+    ln = f"json_extract(metadata, '$.lineno')"
+    rows = self.code_st(select=f'rowid as rowid, {ln} as lineno', where=f'path={cand!r}')
+    if not rows: rows = self.code_st(select=f'rowid as rowid, {ln} as lineno',
+                                     where=f'path like {"%/"+p.name!r}')
+    best, best_ln = None, -1
+    for r in rows:
+        n = int(r['lineno'] or 0)
+        if n <= line and n > best_ln: best, best_ln = r['rowid'], n
+    return best
+
+@patch
+def _graph_enrich(self:Kosha, hits, graph=True):
+    'Attach callers/callees/pagerank to hits — the code-specific half of a result.'
+    if not (graph and hits): return L(hits)
+    try: em = self.graph.node_infos([h['mod_name'] for h in hits if h.get('mod_name')])
+    except Exception: return L(hits)
+    return L(hits).map(lambda h: AttrDict(h | em.get(h['mod_name'], {})))
+
+@patch
+def similar(self:Kosha,
+            path:str,           # file the anchor chunk is in
+            line:int=1,         # 1-indexed line inside that chunk
+            limit:int=15,       # neighbours to return
+            graph:bool=False    # enrich with callers/callees/pagerank
+) -> L:
+    'Code nearest the chunk at `path:line`. Reuses the stored vector, so nothing is re-embedded.'
+    key = self.anchor(path, line)
+    if key is None: return L()
+    return self._graph_enrich(L(self.code_st.ann_neighbors(key, limit, _SIM_COLS)).map(_code_hit), graph)
+
+@patch
+def peers(self:Kosha,
+          path:str,             # file the anchor chunk is in
+          line:int=1,           # 1-indexed line inside that chunk
+          limit:int=25,         # members to return
+          graph:bool=False,     # enrich with callers/callees/pagerank
+          **kw                  # forwarded to Table.peers (min_count, max_count, k)
+) -> AttrDict:
+    '''The cluster the chunk at `path:line` belongs to — its family, not a ranked list.
+
+    Returns `AttrDict(hits, method, note)`; `method` is `usearch`, the `knn` fallback, or `ann`
+    when the index could not be clustered at all and plain neighbours answered instead.'''
+    key = self.anchor(path, line)
+    if key is None: return AttrDict(hits=L(), method=None, note=f'no indexed chunk at {path}:{line}')
+    res = self.code_st.peers(key, limit, _SIM_COLS, **kw)
+    return AttrDict(hits=self._graph_enrich(L(res.hits).map(lambda r: _code_hit(r, res.method)), graph),
+                    method=res.method, note=res.note)
+
+@patch
+def code_clusters(self:Kosha,
+                  limit:int=None,     # keep only the largest `limit` clusters
+                  min_size:int=2,     # drop groups smaller than this
+                  members:int=24,     # member rows fetched per cluster
+                  **kw                # forwarded to Table.clusters
+) -> AttrDict:
+    'The indexed repo grouped by shape: labelled clusters, each with the files it spans.'
+    res = self.code_st.clusters(min_size=min_size, members=members, columns=_SIM_COLS, **kw)
+    cs = res.clusters[:limit] if limit else res.clusters
+    def _c(c):
+        hits = L(c.members).map(lambda r: _code_hit(r, 'cluster'))
+        return AttrDict(centroid=c.centroid, size=c.size, label=c.label,
+                        files=sorted({h.path for h in hits if h.path}), members=hits)
+    return AttrDict(clusters=L(cs).map(_c), method=res.method, note=res.note)
