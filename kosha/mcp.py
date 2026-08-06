@@ -17,10 +17,10 @@ Docs: https://vedicreader.github.io/kosha/mcp.html.md"""
 
 import sys
 from .core import Kosha, env_pkg_versions, pkg_url as _pkg_url
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
 # %% ../nbs/04_mcp.ipynb #c83b2bc6
-mcp = FastMCP('kosha', instructions=(
+mcp = MCPServer('kosha', instructions=(
     'Persistent memory of this repo and its installed packages (FTS5 + vector search + call graph). '
     'Call status first; sync if anything is stale. Before writing new code, env_context checks whether '
     'a dependency already does it; context/repo_context find existing patterns (pagerank = blast radius); '
@@ -78,7 +78,7 @@ def where_to_add(description:str, limit:int=5) -> list:
     "Likely file:line insertion points for new code matching a description, with co_dispatched peers to pattern-match."
     return _jsonable(_kosha().where_to_add(description, limit=limit))
 
-# %% ../nbs/04_mcp.ipynb #e298d504
+# %% ../nbs/04_mcp.ipynb #3bd2babde4012e0a
 @mcp.tool()
 def similar(path:str, line:int=1, limit:int=15, graph:bool=False) -> list:
     "Code nearest the chunk at path:line in embedding space — 'what else looks like this'. Reuses the stored vector, so nothing is re-embedded."

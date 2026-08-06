@@ -20,7 +20,7 @@ from collections import defaultdict, Counter
 from functools import lru_cache
 from importlib.metadata import version as v, metadata as meta, distribution as dist
 from fastcore.all import (Path, first, patch, timed_cache, L, merge, AttrDict, bind, num_cpus,
-                          listify, true, fdelegates, type2str, parallel_async)
+                          listify, true, fdelegates, type2str, parallel_async, parallel as fcp)
 from fastcore.xdg import xdg_data_home
 from tqdm import tqdm
 from json import loads as jl
@@ -111,13 +111,15 @@ def env_pkg_versions(pyproject=True, depth:int=1, xtras='dev') -> dict:
 # %% ../nbs/00_core.ipynb #b18bbd41de289e55
 class Kosha:
 	'Kosha allows you to build a context for code generation based on your repo and environment.'
-	def __init__(self, dir: Path = None, install_skill: bool = False, xdg_dir: Path = None, efn=static_code_embedder):
+	def __init__(self, dir: Path = None, install_skill: bool = False, xdg_dir: Path = None, efn=static_code_embedder,
+			 busy_timeout: int = None):  # ms to wait on a locked db; set this for parallel ingestion, else apsw's default
 		self.root, self.xdg, self.efn = Path(dir or repo_root() or '.'), xdg_dir or xdg_data_home(), efn()
 		self.emb_doc, self.emb_query = doc_encoder(self.efn), query_encoder(self.efn)
 		if install_skill: mv_skill_md(dir=self.root, dry_run=False)
 		self.cp, self.ce = self.root.joinpath('.kosha','code.db'), self.xdg.joinpath('kosha','env.db')
 		for p in (self.cp, self.ce): p.parent.mkdir(parents=True, exist_ok=True)
-		self.codedb, self.envdb, kw = database(self.cp), database(self.ce), dict(hash=True,ann=True)
+		self.busy_timeout, _dbkw = busy_timeout, dict(busy_timeout=busy_timeout)
+		self.codedb, self.envdb, kw = database(self.cp, **_dbkw), database(self.ce, **_dbkw), dict(hash=True,ann=True)
 		self.code_st,self.env_st = self.codedb.get_store(path=str,**kw),self.envdb.get_store(package=str,**kw)
 		self.pkg_st, self.pkgs = self.envdb.get_store('pkg_store', **kw), self.envdb.t.packages
 		self.env_pd, self.code_rd = self.envdb.t.pkg_deps, self.codedb.t.repo_deps
@@ -223,7 +225,8 @@ def count_imp(files, own:str='') -> Counter:
 # %% ../nbs/00_core.ipynb #a3ef441f7ecb6c4c
 @patch
 @fdelegates(pkg2chunks)
-def update_pkg(self:Kosha, pkg:str, embed=True, exts=code_exts, verbose=True, force=False, imports=False, **kwargs):
+def update_pkg(self:Kosha, pkg:str, embed=True, exts=code_exts, verbose=True, force=False, imports=False,
+               parallel=False, chunk=5_000, **kwargs):
     'Update package metadata in the packages table.'
     assert (o:= spec(pkg)), f'pkg {pkg} is not in environment'
     if verbose: print(f'updating pkg: {pkg} ...')
@@ -241,7 +244,8 @@ def update_pkg(self:Kosha, pkg:str, embed=True, exts=code_exts, verbose=True, fo
     cnt = [file_parse(f, assigns=True, imports=imports) for f in tqdm(files,f'parse files from {pkg}')]
     if cnt:
         cnt, doc = enrich_chunks(L(cnt).concat().filter(true).map(lambda d: d | fn(d))), pkg_doc(pkg)
-        res = self.env_st.sync(cnt, key_col='package', emb_fn=self.emb_doc, embed=embed, force=force)
+        res = self.env_st.sync(cnt, key_col='package', emb_fn=self.emb_doc, embed=embed, force=force,
+                               parallel=parallel, chunk=chunk)
         if res['changed']:
             pyf = L(files).filter(lambda f: str(f).endswith('.py'))
             counts = count_imp(pyf, pkg.replace('-','_').split('.')[0])
@@ -267,13 +271,24 @@ def update_pkgs(self:Kosha,
     exts=code_exts,     # file extensions to include
     verbose=True,       # print progress
     force=False,        # reindex even if package version already loaded
+    parallel=False,     # ingest packages concurrently; requires Kosha(busy_timeout=...)
+    n_workers=None,     # threads when parallel=True; fastcore's default if None
+    chunk=5_000,        # rows per write transaction when parallel=True
     **kwargs            # forwarded to update_pkg
 ):
     'Sync installed packages into the env store; if pkgs is None, syncs all env packages.'
     if verbose: print(f'loading pkgs {pkgs} ...' if pkgs else 'No packages to load.')
     if not pkgs: return
-    kw = dict(embed=embed, exts=exts, verbose=verbose, force=force, **kwargs)
-    for pkg in tqdm(list(set(pkgs)), desc='Updating packages', unit='pkg'): self.update_pkg(pkg, **kw)
+    if parallel and not self.busy_timeout: raise ValueError(
+        'update_pkgs(parallel=True) requires a busy timeout: build Kosha(busy_timeout=30_000) '
+        'or run `kosha sync --busy_timeout 30000 --pkg_parallel`.')
+    kw = dict(embed=embed, exts=exts, verbose=verbose, force=force, parallel=parallel, chunk=chunk, **kwargs)
+    pkgs = list(set(pkgs))
+    if parallel:
+        pkw = dict(threadpool=True, progress=True)
+        if n_workers: pkw['n_workers'] = n_workers
+        return fcp(lambda p: self.update_pkg(p, **kw), pkgs, **pkw)
+    for pkg in tqdm(pkgs, desc='Updating packages', unit='pkg'): self.update_pkg(pkg, **kw)
 
 # %% ../nbs/00_core.ipynb #a62a554620a32e84
 repo_skip_folder_re = r'^[._]|^(?:build|dist)$'
@@ -397,7 +412,7 @@ def env_context(self:Kosha,
 				) -> L:
 	'Code search over the env store, with optional key:value filters (e.g. package:fasthtml).'
 	raw, fs = parseq(q)
-	fq, emb = pre(raw, wide=wide, extract_kw=False), self.emb_query(emb_q or raw)
+	fq, emb = raw, self.emb_query(emb_q or raw)
 	wh = ' AND '.join(map(lambda p: f'({p})', L(filt2wh(fs, 'env'), where).filter(true)))
 	fn = lambda r: r | dict(metadata=jl(r['metadata'])) if 'metadata' in r else r
 	kw.pop('sys_wide', None)
@@ -425,7 +440,7 @@ def repo_context(self:Kosha,
 ) -> L:
 	'Semantic + keyword search through indexed repo code.'
 	raw, fs = parseq(q)
-	fq, emb = pre(raw, wide=wide, extract_kw=False), self.emb_query(emb_q or raw)
+	fq, emb = raw, self.emb_query(emb_q or raw)
 	wh = filt2wh(fs, 'code')
 	if where and wh: wh = f'({where}) AND ({wh})'
 	elif where: wh = where
@@ -451,96 +466,6 @@ def pkg_context(self:Kosha,
                 limit:int=10, # limits
 ) -> L:
 	'FTS5+vector search over package descriptions in pkg_store.'
-	fq, emb = pre(q, extract_kw=False), self.emb_query(q).tobytes()
+	fq, emb = q, self.emb_query(q).tobytes()
 	fn = lambda r: r | dict(metadata=jl(r['metadata'])) if isinstance(r.get('metadata'), str) else r
 	return L(self.envdb.search(fq, emb, ann=True, columns=['content','metadata'], table_name='pkg_store', limit=limit)).map(fn)
-
-# %% ../nbs/00_core.ipynb #50c8f9c5
-def _code_hit(r, kind='ann'):
-    'Flatten a code-store row into a code hit: location, symbol, first source line, distance.'
-    m = r.get('metadata') or {}
-    if isinstance(m, str):
-        try: m = jl(m)
-        except Exception: m = {}
-    return AttrDict(path=r.get('path') or m.get('path') or '', lineno=int(m.get('lineno') or 1),
-                    mod_name=m.get('mod_name') or '', type=m.get('type') or '',
-                    sig=(r.get('content') or '').strip().split('\n')[0][:200],
-                    content=r.get('content') or '', kind=kind, dist=r.get('_dist'))
-
-_SIM_COLS = ['content','path','metadata']
-
-@patch
-def anchor(self:Kosha,
-           path:str,        # file the cursor is in
-           line:int=1       # 1-indexed line
-) -> int | None:
-    '''The code-store rowid of the chunk covering `path:line`, or None.
-
-    Chunks are AST nodes, so "covering" means the last chunk that starts at or before `line`.
-    An absolute path is tried first and a path *suffix* second, so a caller holding a repo-relative
-    path (an editor, a diff, a traceback) does not have to know how the index spelled it.'''
-    p = Path(path)
-    cand = str(p.resolve()) if p.exists() else str(p)
-    ln = f"json_extract(metadata, '$.lineno')"
-    rows = self.code_st(select=f'rowid as rowid, {ln} as lineno', where=f'path={cand!r}')
-    if not rows: rows = self.code_st(select=f'rowid as rowid, {ln} as lineno',
-                                     where=f'path like {"%/"+p.name!r}')
-    best, best_ln = None, -1
-    for r in rows:
-        n = int(r['lineno'] or 0)
-        if n <= line and n > best_ln: best, best_ln = r['rowid'], n
-    return best
-
-@patch
-def _graph_enrich(self:Kosha, hits, graph=True):
-    'Attach callers/callees/pagerank to hits — the code-specific half of a result.'
-    if not (graph and hits): return L(hits)
-    try: em = self.graph.node_infos([h['mod_name'] for h in hits if h.get('mod_name')])
-    except Exception: return L(hits)
-    return L(hits).map(lambda h: AttrDict(h | em.get(h['mod_name'], {})))
-
-@patch
-def similar(self:Kosha,
-            path:str,           # file the anchor chunk is in
-            line:int=1,         # 1-indexed line inside that chunk
-            limit:int=15,       # neighbours to return
-            graph:bool=False    # enrich with callers/callees/pagerank
-) -> L:
-    'Code nearest the chunk at `path:line`. Reuses the stored vector, so nothing is re-embedded.'
-    key = self.anchor(path, line)
-    if key is None: return L()
-    return self._graph_enrich(L(self.code_st.ann_neighbors(key, limit, _SIM_COLS)).map(_code_hit), graph)
-
-@patch
-def peers(self:Kosha,
-          path:str,             # file the anchor chunk is in
-          line:int=1,           # 1-indexed line inside that chunk
-          limit:int=25,         # members to return
-          graph:bool=False,     # enrich with callers/callees/pagerank
-          **kw                  # forwarded to Table.peers (min_count, max_count, k)
-) -> AttrDict:
-    '''The cluster the chunk at `path:line` belongs to — its family, not a ranked list.
-
-    Returns `AttrDict(hits, method, note)`; `method` is `usearch`, the `knn` fallback, or `ann`
-    when the index could not be clustered at all and plain neighbours answered instead.'''
-    key = self.anchor(path, line)
-    if key is None: return AttrDict(hits=L(), method=None, note=f'no indexed chunk at {path}:{line}')
-    res = self.code_st.peers(key, limit, _SIM_COLS, **kw)
-    return AttrDict(hits=self._graph_enrich(L(res.hits).map(lambda r: _code_hit(r, res.method)), graph),
-                    method=res.method, note=res.note)
-
-@patch
-def code_clusters(self:Kosha,
-                  limit:int=None,     # keep only the largest `limit` clusters
-                  min_size:int=2,     # drop groups smaller than this
-                  members:int=24,     # member rows fetched per cluster
-                  **kw                # forwarded to Table.clusters
-) -> AttrDict:
-    'The indexed repo grouped by shape: labelled clusters, each with the files it spans.'
-    res = self.code_st.clusters(min_size=min_size, members=members, columns=_SIM_COLS, **kw)
-    cs = res.clusters[:limit] if limit else res.clusters
-    def _c(c):
-        hits = L(c.members).map(lambda r: _code_hit(r, 'cluster'))
-        return AttrDict(centroid=c.centroid, size=c.size, label=c.label,
-                        files=sorted({h.path for h in hits if h.path}), members=hits)
-    return AttrDict(clusters=L(cs).map(_c), method=res.method, note=res.note)

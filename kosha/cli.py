@@ -44,11 +44,14 @@ def sync(
     embed:bool=True,     # embed code chunks (set False for fast metadata-only update)
     force:bool=False,    # force re-sync of all files (ignoring freshness)
     sync_graph:bool=False, # sync call graph (ignoring freshness
+    busy_timeout:int=None, # ms to wait on a locked db; set (e.g. 30000) when syncing in parallel
+    pkg_parallel:bool=False, # ingest env packages concurrently; requires --busy_timeout
 ):
     'Sync repo + env packages + call graph into .kosha/ databases.'
-    k = Kosha()
+    k = Kosha(busy_timeout=busy_timeout)
     pkg_list = pkgs.split(',') if pkgs else None
-    k.sync(dir=dir, pkgs=pkg_list, in_parallel=parallel, embed=embed, force=force, sync_graph=sync_graph)
+    k.sync(dir=dir, pkgs=pkg_list, in_parallel=parallel, embed=embed, force=force, sync_graph=sync_graph,
+           pkg_parallel=pkg_parallel)
 
 # %% ../nbs/03_cli.ipynb #4eb86463e047cf97
 @call_parse

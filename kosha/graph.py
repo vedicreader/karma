@@ -868,14 +868,16 @@ def sync(self: Kosha,
          sync_graph=False, # whether to force graph recomputation even if no files changed; ignored if force=True
          pyproject=True, # if True, auto-detect env packages from pyproject.toml; if False, use pkgs argument as-is
          depth=1, # depth for pyproject env package detection; ignored if pyproject=False
-         embed=True # whether to embed
+         embed=True, # whether to embed
+         pkg_parallel=False, # ingest env packages concurrently; requires Kosha(busy_timeout=...)
+         chunk=5_000 # rows per write transaction when pkg_parallel=True
  ) -> 'Kosha':
 	'Sync code store, env store, and code graph. Runs in a daemon thread by default.'
 	if verbose: print(f"Syncing code graph for dir={dir or self.root}, pkgs={pkgs or 'all env packages'}, graph sync = {sync_graph}")
 	dir = dir or self.root
 	pkgs = listify(pkgs) or self.status(pyproject,depth).get('stale_pkgs', {})
 	ts = [bind(self.update_repo, dir, verbose=verbose, force=force, embed=embed),
-		  bind(self.update_pkgs, pkgs, verbose=verbose, force=force, embed=embed),
+		  bind(self.update_pkgs, pkgs, verbose=verbose, force=force, embed=embed, parallel=pkg_parallel, chunk=chunk),
 		  bind(self.graph.sync, dir=dir, pkgs=pkgs, force=force) if sync_graph else noop]
 	if in_parallel: return parallel(lambda f: f(), ts, threadpool=True, progress=True)
 	else: return L(ts).map(lambda f: f())
