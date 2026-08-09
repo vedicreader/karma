@@ -2,6 +2,9 @@
 
 <!-- do not remove -->
 
+## 0.0.34
+release
+
 ## 0.0.33
 kosha parallel sync with busy_timeout and pkg_parallel (experimental)
 
