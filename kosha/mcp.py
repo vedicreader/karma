@@ -17,7 +17,13 @@ Docs: https://vedicreader.github.io/kosha/mcp.html.md"""
 
 import sys
 from .core import Kosha, env_pkg_versions, pkg_url as _pkg_url
-from mcp.server.mcpserver import MCPServer
+# mcp 2.0 renamed FastMCP to MCPServer and moved it; the constructor, the `tool` decorator and the
+# `run` transports are unchanged, so one alias covers both SDKs rather than pinning either
+try: from mcp.server.mcpserver import MCPServer
+except ImportError:
+    try: from mcp.server.fastmcp import FastMCP as MCPServer
+    except ImportError as e:
+        raise ImportError('kosha-mcp needs the `mcp` package — `pip install mcp`') from e
 
 # %% ../nbs/04_mcp.ipynb #c83b2bc6
 mcp = MCPServer('kosha', instructions=(
@@ -51,10 +57,11 @@ def status() -> dict:
     return _jsonable(_kosha().status())
 
 @mcp.tool()
-def sync(dir:str|None=None, pkgs:list|None=None, embed:bool=True, force:bool=False, sync_graph:bool=False) -> dict:
-    "Sync repo + env packages + call graph into the .kosha/ index. Incremental — only changed files and new package versions re-index. Returns post-sync status."
+def sync(dir:str|None=None, pkgs:list|None=None, embed:bool=True, force:bool=False,
+         repo:bool=True, env:bool=True, graph:bool=True) -> dict:
+    "Sync repo + env packages + call graph into the .kosha/ index. Incremental — only changed files and new package versions re-index. `env=False` is 'this repo only'; `graph=False` skips the call graph, which `ni` and `where_to_add` need. Returns post-sync status."
     k = _kosha()
-    k.sync(dir=dir, pkgs=pkgs, embed=embed, force=force, sync_graph=sync_graph)
+    k.sync(dir=dir, pkgs=pkgs, embed=embed, force=force, repo=repo, env=env, graph=graph)
     return _jsonable(k.status())
 
 # %% ../nbs/04_mcp.ipynb #1c8111fc

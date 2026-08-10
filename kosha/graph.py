@@ -860,25 +860,30 @@ def rank_results(results, query, soft_pkgs=None, top_k=None, penalise_paths=True
 # %% ../nbs/01_graph.ipynb #6f57bfb4
 @patch
 def sync(self: Kosha,
-         pkgs=None, # list of package names to sync (e.g. ['httpx', 'fastcore']); if None, sync all env packages
+         pkgs=None, # list of package names to sync (e.g. ['httpx', 'fastcore']); if None, sync every stale env package
          dir=None, # directory to sync; if None, sync all of root
          verbose=True, # print progress messages
          in_parallel=True, # run repo, env, and graph sync in parallel; also fans env packages out across threads
-         force=False, # ignore file mtimes and reprocess all files
-         sync_graph=False, # whether to force graph recomputation even if no files changed; ignored if force=True
+         force=False, # ignore file mtimes and reprocess everything, graph included
+         repo=True, # index the repo
+         env=True, # index env packages; False is how you say "this repo only", whatever `pkgs` holds
+         graph=True, # build the call graph — incrementally, unless `force`
+         sync_graph=None, # deprecated: the old name for `graph`
          pyproject=True, # if True, auto-detect env packages from pyproject.toml; if False, use pkgs argument as-is
          depth=1, # depth for pyproject env package detection; ignored if pyproject=False
          embed=True, # whether to embed
          pkg_parallel=False, # ingest env packages concurrently; requires Kosha(busy_timeout=...)
          chunk=5_000 # rows per write transaction when pkg_parallel=True
  ) -> 'Kosha':
-	'Sync code store, env store, and code graph. Runs in a daemon thread by default.'
-	if verbose: print(f"Syncing code graph for dir={dir or self.root}, pkgs={pkgs or 'all env packages'}, graph sync = {sync_graph}")
+	'Sync the code store, the env store and the code graph'
+	if sync_graph is not None: graph = sync_graph
+	if verbose: print(f'Syncing dir={dir or self.root}, repo={repo}, env={env}, graph={graph}, force={force}')
 	dir = dir or self.root
-	pkgs = listify(pkgs) or self.status(pyproject,depth).get('stale_pkgs', {})
-	ts = [bind(self.update_repo, dir, verbose=verbose, force=force, embed=embed),
-		  bind(self.update_pkgs, pkgs, verbose=verbose, force=force, embed=embed, parallel=pkg_parallel, chunk=chunk),
-		  bind(self.graph.sync, dir=dir, pkgs=pkgs, force=force) if sync_graph else noop]
+	pkgs = (listify(pkgs) or self.status(pyproject,depth).get('stale_pkgs', {})) if env else []
+	ts = [bind(self.update_repo, dir, verbose=verbose, force=force, embed=embed) if repo else noop,
+		  bind(self.update_pkgs, pkgs, verbose=verbose, force=force, embed=embed, parallel=pkg_parallel, chunk=chunk)
+		      if pkgs else noop,
+		  bind(self.graph.sync, dir=dir if repo else None, pkgs=pkgs, force=force) if graph else noop]
 	if in_parallel: return parallel(lambda f: f(), ts, threadpool=True, progress=True)
 	else: return L(ts).map(lambda f: f())
 

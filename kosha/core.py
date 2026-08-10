@@ -100,10 +100,11 @@ def pkg_trans_deps(seeds:list, depth:int=2) -> L:
 		seen |= nxt; frontier = nxt
 	return L(seen)
 
-# %% ../nbs/00_core.ipynb #144f225d425b7d6b
+# %% ../nbs/00_core.ipynb #97b484ed681d266d
 def env_pkg_versions(pyproject=True, depth:int=1, xtras='dev') -> dict:
 	'''Get a dict of installed package versions using importlib.metadata.
 	passing depth traverse multiple layers of dependencies'''
+	if pyproject and repo_root() is None: return {}
 	pkgs = installed_packages(pyproject=pyproject,xtras=xtras)
 	if pyproject and depth: pkgs = pkg_trans_deps(pkgs, depth)
 	return {dist(p).metadata['Name']: dist(p).version for p in pkgs}

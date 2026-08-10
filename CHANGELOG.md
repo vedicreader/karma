@@ -2,6 +2,9 @@
 
 <!-- do not remove -->
 
+## 0.0.36
+make all legs optional
+
 ## 0.0.35
 bump
 

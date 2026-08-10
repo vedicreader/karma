@@ -40,18 +40,28 @@ def _print_results(results):
 def sync(
     dir:str=None,        # directory to sync; defaults to repo root
     pkgs:str=None,       # comma-separated package names; defaults to all pyproject.toml deps
-    parallel:bool=True, # run repo, env, and graph sync in parallel
+    repo:bool=True,      # index the repo
+    env:bool=True,       # index env packages; --no-env is "this repo only", and skips the staleness scan
+    graph:bool=True,     # build the call graph
+    parallel:bool=True,  # run repo, env, and graph sync in parallel
     embed:bool=True,     # embed code chunks (set False for fast metadata-only update)
-    force:bool=False,    # force re-sync of all files (ignoring freshness)
-    sync_graph:bool=False, # sync call graph (ignoring freshness
+    force:bool=False,    # re-sync everything, graph included, rather than what changed
     busy_timeout:int=None, # ms to wait on a locked db; set (e.g. 30000) when syncing in parallel
     pkg_parallel:bool=False, # ingest env packages concurrently; requires --busy_timeout
+    as_json:bool=False,  # output the post-sync status as JSON
 ):
-    'Sync repo + env packages + call graph into .kosha/ databases.'
+    '''Sync repo + env packages + call graph into .kosha/ databases.
+
+    The flags are `context`'s flags, and they mean the same thing here. They used to be one
+    `--sync_graph` that defaulted to off, so this command promised a call graph in its own help text
+    and never built one — `kosha ni` then found nothing and there was no way to tell why.'''
     k = Kosha(busy_timeout=busy_timeout)
     pkg_list = pkgs.split(',') if pkgs else None
-    k.sync(dir=dir, pkgs=pkg_list, in_parallel=parallel, embed=embed, force=force, sync_graph=sync_graph,
-           pkg_parallel=pkg_parallel)
+    k.sync(dir=dir, pkgs=pkg_list, repo=repo, env=env, graph=graph, in_parallel=parallel, embed=embed,
+           force=force, pkg_parallel=pkg_parallel)
+    s = k.status()
+    print(json.dumps(_to_json(s)) if as_json else
+          '\n'.join(f'{k2}: {v}' for k2, v in s.items() if k2 != 'stale_pkgs'))
 
 # %% ../nbs/03_cli.ipynb #4eb86463e047cf97
 @call_parse
