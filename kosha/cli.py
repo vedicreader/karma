@@ -10,7 +10,7 @@ __all__ = ['CMDS', 'sync', 'context', 'repo_context', 'env_context', 'ni', 'watc
            'top_nodes', 'status', 'where_to_add', 'nuke', 'daemon', 'install', 'main']
 
 # %% ../nbs/03_cli.ipynb #cell-imports
-import json, sys
+import json, re, sys
 from fastcore.script import call_parse, anno_parser
 from .core import Kosha, env_pkg_versions
 
@@ -35,6 +35,11 @@ def _print_results(results):
         callers = r.get('callers', [])
         if callers: print(f"Callers: {', '.join(list(callers)[:5])}")
 
+# %% ../nbs/03_cli.ipynb #split_pkgs
+def _split_pkgs(pkgs:str):
+    "Split a comma-separated package list, ignoring the commas inside extras like `rishi[litert,llama]`"
+    return [p for p in re.sub(r'\[[^\]]*\]', '', pkgs).split(',') if p.strip()]
+
 # %% ../nbs/03_cli.ipynb #2e60df2d883b1665
 @call_parse
 def sync(
@@ -56,7 +61,7 @@ def sync(
     `--sync_graph` that defaulted to off, so this command promised a call graph in its own help text
     and never built one — `kosha ni` then found nothing and there was no way to tell why.'''
     k = Kosha(busy_timeout=busy_timeout)
-    pkg_list = pkgs.split(',') if pkgs else None
+    pkg_list = _split_pkgs(pkgs) if pkgs else None
     k.sync(dir=dir, pkgs=pkg_list, repo=repo, env=env, graph=graph, in_parallel=parallel, embed=embed,
            force=force, pkg_parallel=pkg_parallel)
     s = k.status()

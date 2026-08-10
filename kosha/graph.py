@@ -879,7 +879,7 @@ def sync(self: Kosha,
 	if sync_graph is not None: graph = sync_graph
 	if verbose: print(f'Syncing dir={dir or self.root}, repo={repo}, env={env}, graph={graph}, force={force}')
 	dir = dir or self.root
-	pkgs = (listify(pkgs) or self.status(pyproject,depth).get('stale_pkgs', {})) if env else []
+	pkgs = (listify(pkgs) or list(self.status(pyproject,depth).get('stale_pkgs', {}))) if env else []
 	pkgs = L(pkgs).map(_pkg_name).unique()
 	ts = [bind(self.update_repo, dir, verbose=verbose, force=force, embed=embed) if repo else noop,
 		  bind(self.update_pkgs, pkgs, verbose=verbose, force=force, embed=embed, parallel=pkg_parallel, chunk=chunk)
