@@ -14,7 +14,7 @@ from collections import defaultdict
 from litesearch import *
 from fastcore.all import (Path, L, patch, groupby, parallel_async, tuplify, first, fdelegates, globtastic, bind, true, dict2obj,
                           listify, filter_keys, in_, chunked, noop, parallel, not_)
-from .core import arun, Kosha, parse, has_init, imp_root, env_pkg_versions,repo_skip_folder_re,strict_skip_file_re
+from .core import arun, Kosha, parse, has_init, imp_root, env_pkg_versions, _pkg_name, repo_skip_folder_re,strict_skip_file_re
 from pyan.analyzer import CallGraphVisitor
 from pyan.anutils import Scope, ExecuteInInnerScope
 from tqdm import tqdm
@@ -880,6 +880,7 @@ def sync(self: Kosha,
 	if verbose: print(f'Syncing dir={dir or self.root}, repo={repo}, env={env}, graph={graph}, force={force}')
 	dir = dir or self.root
 	pkgs = (listify(pkgs) or self.status(pyproject,depth).get('stale_pkgs', {})) if env else []
+	pkgs = L(pkgs).map(_pkg_name).unique()
 	ts = [bind(self.update_repo, dir, verbose=verbose, force=force, embed=embed) if repo else noop,
 		  bind(self.update_pkgs, pkgs, verbose=verbose, force=force, embed=embed, parallel=pkg_parallel, chunk=chunk)
 		      if pkgs else noop,

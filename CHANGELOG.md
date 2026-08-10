@@ -2,6 +2,9 @@
 
 <!-- do not remove -->
 
+## 0.0.37
+sync pkgs like rishi[all]
+
 ## 0.0.36
 make all legs optional
 

@@ -82,6 +82,7 @@ def arun(coro) -> any:
 
 # %% ../nbs/00_core.ipynb #b09b1e4842290bfb
 _req_nm = re.compile(r'^[\w][\w.-]*')
+_pkg_name = lambda pkg: _req_nm.match(pkg.strip()).group(0)
 _spec_cached = lru_cache(maxsize=None)(spec)
 
 def pkg_trans_deps(seeds:list, depth:int=2) -> L:
@@ -207,6 +208,7 @@ def nuke(self:Kosha, env=False):
 @patch
 def _is_pkg_ingested(self:Kosha, pkg:str) -> bool:
 	'Check if a package is already ingested and up-to-date.'
+	pkg = _pkg_name(pkg)
 	return first(self.pkgs(select='name, version', where=f'name={pkg!r} and version={v(pkg)!r}'))
 
 @patch
@@ -229,6 +231,7 @@ def count_imp(files, own:str='') -> Counter:
 def update_pkg(self:Kosha, pkg:str, embed=True, exts=code_exts, verbose=True, force=False, imports=False,
                parallel=False, chunk=5_000, **kwargs):
     'Update package metadata in the packages table.'
+    pkg = _pkg_name(pkg)
     assert (o:= spec(pkg)), f'pkg {pkg} is not in environment'
     if verbose: print(f'updating pkg: {pkg} ...')
     ep = self._is_pkg_ingested(pkg)
@@ -284,7 +287,7 @@ def update_pkgs(self:Kosha,
         'update_pkgs(parallel=True) requires a busy timeout: build Kosha(busy_timeout=30_000) '
         'or run `kosha sync --busy_timeout 30000 --pkg_parallel`.')
     kw = dict(embed=embed, exts=exts, verbose=verbose, force=force, parallel=parallel, chunk=chunk, **kwargs)
-    pkgs = list(set(pkgs))
+    pkgs = L(pkgs).map(_pkg_name).unique()
     if parallel:
         pkw = dict(threadpool=True, progress=True)
         if n_workers: pkw['n_workers'] = n_workers

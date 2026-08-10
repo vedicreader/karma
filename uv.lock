@@ -1062,11 +1062,11 @@ wheels = [
 
 [[package]]
 name = "fastcore"
-version = "2.2.8"
+version = "2.2.9"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/6f/5d/8979dc607ec87487e3b008093da23f2e1cdb32b06105715752fbf14d2369/fastcore-2.2.8.tar.gz", hash = "sha256:7f55a9ea5051e46992ee16890a540e28385daad9a25171795dd2cf1952f37af3", size = 140876, upload-time = "2026-08-10T01:21:43.913Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/3f/94/9b2d34f604ead08e0135e60dce4716e2701acbe1bd099a9dfdd867c5960f/fastcore-2.2.9.tar.gz", hash = "sha256:71b3f0df672442e4a45cd4e3b09e9b93f5ed58cf88767bf0094dd18f124f380d", size = 141288, upload-time = "2026-08-10T03:49:24.736Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/9f/a1/cea4b889be60cf0431647c62b9b182f1866f8d13d61bfa371c51171bdd1f/fastcore-2.2.8-py3-none-any.whl", hash = "sha256:0345b8896a16ec73ddfa178fac823bcb810b357997da150869e34f60420bcf8c", size = 147421, upload-time = "2026-08-10T01:21:42.566Z" },
+    { url = "https://files.pythonhosted.org/packages/6b/9c/5d9db78928d11306ef36508caa765575c74bb44644f809fd5634942313ec/fastcore-2.2.9-py3-none-any.whl", hash = "sha256:55ed516296f001e0d7f7f235d5e5a988cd7ef5ed3843bdc7013f8e1e5850dbce", size = 147777, upload-time = "2026-08-10T03:49:23.216Z" },
 ]
 
 [[package]]
@@ -2211,7 +2211,7 @@ wheels = [
 
 [[package]]
 name = "litesearch"
-version = "0.1.18"
+version = "0.1.21"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "chonkie" },
@@ -2232,9 +2232,9 @@ dependencies = [
     { name = "usearch" },
     { name = "yake" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/36/4b/93daa6bca3ea08674a01006f0a3f362038ae319ec061400a201a1ea52da9/litesearch-0.1.18.tar.gz", hash = "sha256:6173165ab5a10553b2d4134e321d755775b4d625dc0de4762d81ba870ffce854", size = 121592, upload-time = "2026-08-09T04:03:07.568Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/c5/57/64aebde3545ec325427ef45611219f8a730fbfe8b358b235f0bfc430006e/litesearch-0.1.21.tar.gz", hash = "sha256:9e4baa4811f262e81b7f2ccb9e3f7f103db20b50ad2de10885cad65df05c1da5", size = 128439, upload-time = "2026-08-10T05:48:51.992Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/b1/04/7ee8e02a4ee41a5da2ffc1a6620ac9c4ff659ae501fb1e75f1a8e2b1d47e/litesearch-0.1.18-py3-none-any.whl", hash = "sha256:30e2e9e4954333cacb4e110b0dd7124f5afada82289ee19924f0bc143f29461e", size = 106718, upload-time = "2026-08-09T04:03:05.868Z" },
+    { url = "https://files.pythonhosted.org/packages/6c/94/feb396d37acfd45f659e5d3ee8fe83603aeb515b4571ab302eeb106894a7/litesearch-0.1.21-py3-none-any.whl", hash = "sha256:97f8a9b0ed34ed94da85adadb0870ccf1845c2413c7b0df5b8878c3592069487", size = 112335, upload-time = "2026-08-10T05:48:50.305Z" },
 ]
 
 [[package]]
@@ -2688,7 +2688,7 @@ wheels = [
 
 [[package]]
 name = "nbdev"
-version = "3.3.9"
+version = "3.3.10"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "asttokens" },
@@ -2703,9 +2703,9 @@ dependencies = [
     { name = "tomli", marker = "python_full_version < '3.11'" },
     { name = "watchdog" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/da/d9/014d2262cbaf667670b1c17448e3df5bf1f7399ee07e0e277f161f1d0a12/nbdev-3.3.9.tar.gz", hash = "sha256:6c6a363f49fabf40c22314fca14c71c398b4dc06fe3979b66d22b63dcd4a2435", size = 85751, upload-time = "2026-08-10T01:06:55.547Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/47/f1/43714afb4ee3d0e1017625e756ea9db060deac8896e8d72c4a23581f283c/nbdev-3.3.10.tar.gz", hash = "sha256:b3e1496f40b4e24dc8ec2209e8199fa79b3cdd1f1dcf1b692ae72dde5ad60670", size = 85820, upload-time = "2026-08-10T03:45:17.022Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/3e/af/deb33bec6023a5730fe6bb57d4d04dfa0309f4208cc7d2ec810f227df8e9/nbdev-3.3.9-py3-none-any.whl", hash = "sha256:46ba69b45044ff0deb6a51d9e1dca84989199ed846a78fb411b9e891ce8e3f23", size = 90730, upload-time = "2026-08-10T01:06:54.035Z" },
+    { url = "https://files.pythonhosted.org/packages/c4/47/698572a9e1d468f159718dd33fb281de38bb9cc3b9d34eb2ab0ef79349fa/nbdev-3.3.10-py3-none-any.whl", hash = "sha256:14cbf88329b0f6bbf66f55e9025747b15cf876dd23cad1a673f0a7b648573113", size = 90816, upload-time = "2026-08-10T03:45:15.405Z" },
 ]
 
 [[package]]
