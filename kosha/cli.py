@@ -35,6 +35,14 @@ def _print_results(results):
         callers = r.get('callers', [])
         if callers: print(f"Callers: {', '.join(list(callers)[:5])}")
 
+def _warn_filters(query:str):
+    'Warn on stderr about filter-shaped tokens kosha did not recognise, which are searched as text.'
+    from .core import parseq
+    if unk := parseq(query)[1].get('_unknown'):
+        print(f"warning: unrecognised filter{'s' if len(unk)>1 else ''} "
+              f"{', '.join(f'{u}:' for u in unk)} — searched as text, not used to filter. "
+              f"Known: package (pkg), path (dir), file, lang (ext), type.", file=sys.stderr)
+
 # %% ../nbs/03_cli.ipynb #split_pkgs
 def _split_pkgs(pkgs:str):
     "Split a comma-separated package list, ignoring the commas inside extras like `rishi[litert,llama]`"
@@ -76,11 +84,13 @@ def context(
     repo:bool=True,      # include repo results
     env:bool=True,       # include env results
     graph:bool=True,     # include call graph enrichment
+    rerank:bool=False,   # reorder the top-k with a flashrank cross-encoder
     as_json:bool=False,  # output JSON instead of markdown
 ):
     'Fan-out semantic search over repo and env, optionally graph-enriched.'
+    _warn_filters(query)
     k = Kosha()
-    results = k.context(query, limit=limit, repo=repo, env=env, graph=graph)
+    results = k.context(query, limit=limit, repo=repo, env=env, graph=graph, rerank=rerank)
     if as_json: print(json.dumps(_to_json(results)))
     else: _print_results(results)
 
@@ -92,6 +102,7 @@ def repo_context(
     as_json:bool=False, # output JSON
 ):
     'Semantic + keyword search over indexed repo code only.'
+    _warn_filters(query)
     k = Kosha()
     results = k.repo_context(query, limit=limit)
     if as_json: print(json.dumps(_to_json(results)))
@@ -105,6 +116,7 @@ def env_context(
     as_json:bool=False, # output JSON
 ):
     'Semantic search over indexed env packages only.'
+    _warn_filters(query)
     k = Kosha()
     results = k.env_context(query, limit=limit)
     if as_json: print(json.dumps(_to_json(results)))

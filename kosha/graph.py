@@ -11,7 +11,8 @@ __all__ = ['CodeGraph', 'dyn_edges', 'static_edges', 'is_symbol_query', 'rank_re
 import ast, re, os
 from json import loads as jl
 from collections import defaultdict
-from litesearch import *
+from litesearch.core import database, rrf_merge, rerank_hits
+from litesearch.data import *
 from fastcore.all import (Path, L, patch, groupby, parallel_async, tuplify, first, fdelegates, globtastic, bind, true, dict2obj,
                           listify, filter_keys, in_, chunked, noop, parallel, not_)
 from .core import arun, Kosha, parse, has_init, imp_root, env_pkg_versions, _pkg_name, repo_skip_folder_re,strict_skip_file_re
@@ -899,6 +900,8 @@ def context(self: Kosha,
 			compact: bool = False, # return slim dicts (mod_name, signature, docstring, lineno) instead of full chunks
             columns:str='content,metadata',
             sys_wide=True,
+            rerank: bool = False,     # reorder the boosted top-k with a flashrank cross-encoder
+            rerank_model: str = None, # flashrank model name (None -> fast default)
 			**kw                  # forwarded to env_context / repo_context
 ) -> L:
 	'Fan-out semantic search: parse filters, run repo + env searches, merge with chained RRF, then rerank.'
@@ -919,6 +922,10 @@ def context(self: Kosha,
 	if not res: return L()
 	soft_pkgs = set(pkg) if pkg else set(raw.split()) & set(self.pkgs2consider(sys_wide))
 	ranked = rank_results(res, raw, soft_pkgs=soft_pkgs, top_k=limit) if boost else res
+	# Reranking the boosted top-k only. Widening the pool first measures worse *and* costs
+	# linearly more: pool recall rises (0.42 -> 0.71 going 20 -> 400/leg) but the cross-encoder
+	# cannot surface the target among the extra distractors, so R@10 drops 0.375 -> 0.292.
+	if rerank: ranked = L(rerank_hits(raw, list(ranked), rerank_model, limit))
 	if graph:
 		em = self.graph.node_infos([r['metadata']['mod_name'] for r in ranked])
 		ranked = L(ranked.map(lambda r: r | em.get(r['metadata']['mod_name'], {})))

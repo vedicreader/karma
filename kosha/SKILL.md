@@ -59,19 +59,14 @@ for r in k.env_context('description of what you want', limit=10):
 | What's a package's real public API? (`__all__` + `@patch`) | `k.public_api('pkg')` |
 | Where do I add new code? (returns `file:line` insertion points) | `k.where_to_add('desc', limit=5)` |
 | Rebuild call graph without re-embedding (e.g. after kosha update) | `k.sync(embed=False)` |
-| What else looks like the code at this line? | `k.similar('path/to/f.py', 42, limit=15)` |
-| Where else did we already do this? (the family, not the top 15) | `k.peers('path/to/f.py', 42)` |
-| What is in this codebase? (labelled map, for orienting) | `k.code_clusters(limit=20)` |
+| Search long-form docs (READMEs) rather than code | `k.docs_context('desc')` |
 
 `context(q, graph=True)` is the right default once a task touches more than one module.
 `env_context` is already a semantic similarity search over *text* — pass any description, snippet,
 or function name.
 
-`similar` / `peers` / `code_clusters` start from a **location** instead of a string, which is the
-question you actually have with a file open. They reuse the vector already in the index, so no
-model runs. `peers` and `code_clusters` return `AttrDict(hits|clusters, method, note)`: usearch
-needs a tall HNSW graph and refuses to cluster a small index, so both fall back to k-NN and name
-which one answered in `note`. Read it before concluding a repo has no structure.
+`rerank=True` on any of the search calls reorders the results with a cross-encoder. It reorders
+what was retrieved and never adds to it, for ~15-35ms.
 
 ## Filter syntax
 
@@ -79,11 +74,15 @@ Filters combine with natural language in one query string; bare package names au
 
 | Token | Example | Effect |
 |-------|---------|--------|
-| `package:name` | `package:fastcore` | Restrict to one package |
-| `path:pattern` | `path:xtras` | Restrict by path substring |
+| `package:name` (`pkg:`) | `package:fastcore` | Restrict to one package |
+| `path:pattern` (`dir:`) | `path:xtras` | Restrict by path substring |
 | `file:glob` | `file:xtras*` | Restrict by filename glob |
-| `lang:ext` | `lang:py` | Filter by language |
+| `lang:ext` (`ext:`) | `lang:py` | Filter by language |
 | `type:node` | `type:FunctionDef` | Filter by AST node type |
+
+An unrecognised key is **not** dropped — it is searched as text against every package, which
+returns a confident page of irrelevant results. The CLI warns; in Python check
+`parseq(q)[1]['_unknown']`.
 
 ## Reading a result
 
@@ -104,7 +103,7 @@ and where the registration lives, without reading the glue code.
 
 - **MCP server:** if `kosha-mcp` is configured in the host (`claude mcp add kosha -- uv run kosha-mcp`),
   the same operations are available as MCP tools (`status`, `context`, `env_context`, `node_info`,
-  `where_to_add`, `similar`, `peers`, `code_clusters`, ...) — call those directly instead of the
+  `where_to_add`, `public_api`, `api_paths`, ...) — call those directly instead of the
   in-process API.
 - **Daemon protocol:** send JSON `{"cmd": "...", "args": {...}}` on stdin. Commands: `sync`,
   `context`, `repo_context`, `env_context`, `ni`, `top_nodes`, `public_api`, `api_call_paths`,

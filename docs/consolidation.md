@@ -8,23 +8,10 @@ PDFs belongs one layer down.
 
 ## Landed
 
-Three queries that start from a **location** rather than a string — the question you have with a
-file open — built on litesearch's new ANN primitives (`store.ann_neighbors`, `store.clusters`,
-`store.peers`):
-
-```python
-k.anchor('src/app.py', 42)      # -> the code-store rowid covering that line
-k.similar('src/app.py', 42)     # k-NN: what else looks like this
-k.peers('src/app.py', 42)       # the cluster it belongs to: where else did we already do this
-k.code_clusters(limit=20)       # a labelled map of the repo, for orienting
-```
-
-All three take `graph=True` to enrich hits with callers/callees/pagerank, and all three are also
-MCP tools. `peers` and `code_clusters` return `method` and `note` — usearch refuses to cluster a
-small index, and the k-NN fallback is a different answer that the caller should be able to name.
-
-This replaces ~150 lines in `leela/search.py`, which reimplemented all of it directly against
-`kosha.code_st` and its usearch index.
+Nothing from the location-first query set. `anchor` / `similar` / `peers` / `code_clusters` were
+specced here and wired up as MCP tools, but never implemented on `Kosha` — the tools raised
+`AttributeError` on call. They have been removed from `mcp.py` and `SKILL.md` rather than left
+as a promise. Retrieval consolidation continues below.
 
 ## Next
 

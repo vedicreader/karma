@@ -2,6 +2,9 @@
 
 <!-- do not remove -->
 
+## 0.1.0
+kosha release with litesearch Index, reranking
+
 ## 0.0.38
 pkg extraction bug fix
 
