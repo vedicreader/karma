@@ -2,6 +2,9 @@
 
 <!-- do not remove -->
 
+## 0.1.2
+bug fix with lexical scoping
+
 ## 0.1.1
 kosha fast path
 

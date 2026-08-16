@@ -1017,22 +1017,49 @@ import hashlib
 
 # %% ../nbs/01_graph.ipynb #9035c5d9
 def _source_hash(src): return hashlib.blake2b(src.encode(), digest_size=16).hexdigest()
+def _fast_defs(tree, mod):
+    out = {}
+    def visit(body, scope):
+        for n in body:
+            if isinstance(n, ast.ClassDef): visit(n.body, f'{scope}.{n.name}')
+            elif isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                name = f'{scope}.{n.name}'
+                out[id(n)] = name
+                visit(n.body, name)
+    visit(tree.body, mod)
+    return out
+
+def _body_calls(fn):
+    calls = []
+    class Visitor(ast.NodeVisitor):
+        def visit_FunctionDef(self, n):
+            if n is fn: self.generic_visit(n)
+        visit_AsyncFunctionDef = visit_FunctionDef
+        def visit_ClassDef(self, n): pass
+        def visit_Call(self, n):
+            calls.append(n)
+            self.generic_visit(n)
+    Visitor().visit(fn)
+    return calls
+
 def _fast_edges(src, mod, filename=''):
     tree, imp, top, all_fns, imp2mod = parse(src)
     if tree is None: return {}, [], []
-    fns = {n.name for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
-    meta = {}
-    edges = []
+    names = _fast_defs(tree, mod)
+    local = defaultdict(list)
+    for name in names.values(): local[name.rsplit('.', 1)[-1]].append(name)
+    meta, edges = {}, []
     for n in ast.walk(tree):
-        if not isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)): continue
-        caller = f'{mod}.{n.name}'
+        if id(n) not in names: continue
+        caller = names[id(n)]
         meta[caller] = {'node': caller, 'flavor': 'function', 'file': filename, 'method': n.name}
-        for c in ast.walk(n):
-            if not isinstance(c, ast.Call): continue
-            if isinstance(c.func, ast.Name) and (callee := f'{mod}.{c.func.id}' if c.func.id in fns else imp2mod.get(c.func.id)):
-                edges.append(_e(caller, callee, 'static', 1.0))
+        for c in _body_calls(n):
+            if not isinstance(c.func, ast.Name): continue
+            targets = local[c.func.id]
+            callee = targets[0] if len(targets) == 1 else imp2mod.get(c.func.id)
+            if callee: edges.append(_e(caller, callee, 'static', 1.0))
     meta |= _lambda_nodes(sources={mod: src})
-    for row in meta.values(): row['method'] = row['node'].rsplit('.', 1)[-1]
+    for row in meta.values(): row['file'], row['method'] = filename, row['node'].rsplit('.', 1)[-1]
     return meta, edges, _attr_call_hints(sources={mod: src}, meta=meta)
 
 @patch
@@ -1071,25 +1098,30 @@ def _stale(self: CodeGraph, files, sc=None, force=False):
 @patch
 def _fast_process_files(self: CodeGraph, files, root=None, full=False):
     if not files: return self
-    if full: return self.process_files(files, root=root)
-    gone, all_edges, hints = set(), [], []
-    for f in files:
-        p = Path(f); src = p.read_text(errors='replace')
-        mod = '.'.join(p.relative_to(root or imp_root(p)).with_suffix('').parts)
-        meta, edges, hs = _fast_edges(src, mod, str(p))
-        old = self.file2nodes(str(p)); self._drop_file(str(p), incoming=False)
-        if meta: self.db.t.graph_nodes.insert_all(meta.values(), upsert=True, pk='node')
-        gone |= old - set(meta); all_edges += edges; hints += hs
+    old = set().union(*(self.file2nodes(str(f)) for f in files))
+    for f in files: self._drop_file(str(f), incoming=False)
+    if full:
+        self.process_files(files, root=root)
+    else:
+        all_edges, hints = [], []
+        for f in files:
+            p = Path(f); src = p.read_text(errors='replace')
+            mod = '.'.join(p.relative_to(root or imp_root(p)).with_suffix('').parts)
+            meta, edges, hs = _fast_edges(src, mod, str(p))
+            if meta: self.db.t.graph_nodes.insert_all(meta.values(), upsert=True, pk='node')
+            all_edges += edges; hints += hs
+        if all_edges: self.db.t.graph_edges.insert_all(all_edges, upsert=True, pk=('caller','callee','kind'))
+        if hints: self.pa.insert_all(hints, upsert=True, pk=('caller','method'), ignore=True)
+        self._add_dyn({'.'.join(Path(f).relative_to(root or imp_root(f)).with_suffix('').parts): Path(f) for f in files})
+        self.resolve_attr_calls()
+    gone = old - set().union(*(self.file2nodes(str(f)) for f in files))
     if gone:
-        pl = ','.join('?' * len(gone)); self.db.q(f'DELETE FROM graph_edges WHERE callee IN ({pl})', list(gone))
-    if all_edges: self.db.t.graph_edges.insert_all(all_edges, upsert=True, pk=('caller','callee','kind'))
-    if hints: self.pa.insert_all(hints, upsert=True, pk=('caller','method'), ignore=True)
-    self._add_dyn({'.'.join(Path(f).relative_to(root or imp_root(f)).with_suffix('').parts): Path(f) for f in files})
-    self.resolve_attr_calls()
+        pl = ','.join('?' * len(gone))
+        self.db.q(f'DELETE FROM graph_edges WHERE callee IN ({pl})', list(gone))
     return self
 
 @patch
-def sync_dir(self: CodeGraph, dir: str | Path, force=False, mode='fast') -> 'CodeGraph':
+def sync_dir(self: CodeGraph, dir: str | Path, force=False, mode='fast', root=None) -> 'CodeGraph':
     'Incremental directory sync; unchanged source hashes are skipped.'
     if not dir: return self
     files = dir2files(dir, exts=['.py'], func=os.path.join)
@@ -1097,7 +1129,7 @@ def sync_dir(self: CodeGraph, dir: str | Path, force=False, mode='fast') -> 'Cod
     removed = known - set(files)
     for f in removed: self._drop_file(f)
     changed = self._stale(files, str(dir), force)
-    if changed: self._fast_process_files(changed, str(dir), full=mode == 'full'); self._index_files(changed, str(dir))
+    if changed: self._fast_process_files(changed, str(root or dir), full=mode == 'full'); self._index_files(changed, str(dir))
     self._graph_changed = getattr(self, '_graph_changed', False) or bool(removed or changed)
     return self
 
@@ -1108,7 +1140,7 @@ def sync_pkgs(self: CodeGraph, pkgs: list[str], force=False, mode='fast') -> 'Co
         s = spec(pkg)
         if not s: continue
         p = Path(s.origin).parent if s.origin else Path(s.submodule_search_locations[0])
-        self.sync_dir(p, force=force, mode=mode)
+        self.sync_dir(p, force=force, mode=mode, root=p.parent)
     return self
 
 @patch
