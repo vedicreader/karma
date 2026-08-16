@@ -2,6 +2,9 @@
 
 <!-- do not remove -->
 
+## 0.1.3
+graph edges bug fix
+
 ## 0.1.2
 bug fix with lexical scoping
 

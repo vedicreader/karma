@@ -67,12 +67,10 @@ class CodeGraph:
 		pa.create(caller=str, method=str, pkgs=str, if_not_exists=True, pk='caller,method')
 		ge.create(caller=str, callee=str, kind=str, confidence=float, if_not_exists=True, pk=('caller','callee','kind'))
 		gn.create(node=str,flavor=str,file=str,method=str,pagerank=float,in_degree=int,out_degree=int,if_not_exists=True,pk='node')
-		try: gn.add_column('method', str)
-		except Exception: pass
+		if 'method' not in gn.columns_dict: gn.add_column('method', str)
 		cd.create(group_id=int, node=str, if_not_exists=True)
 		fi.create(path=str, root=str, source_hash=str, last_analyzed_at=float, if_not_exists=True, pk='path')
-		try: fi.add_column('source_hash', str)
-		except Exception: pass
+		if 'source_hash' not in fi.columns_dict: fi.add_column('source_hash', str)
 		fi.create_index(['root'], if_not_exists=True)
 		fi.create_index(['source_hash'], if_not_exists=True)
 		gn.create_index(['method'], if_not_exists=True)
