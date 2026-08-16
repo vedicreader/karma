@@ -57,4 +57,5 @@ dev = [
     "mcp>=1.2.0",
     "nbdev>=3.0.15",
     "notebook>=7.5.5",
+    "slopometer>=0.0.1",
 ]

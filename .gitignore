@@ -157,3 +157,6 @@ nbs/kosha/
 kosha/env.db
 kosha/env.db-shm
 kosha/env.db-wal
+
+#leela sessions
+leela_*
