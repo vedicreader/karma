@@ -2,6 +2,48 @@
 
 <!-- do not remove -->
 
+## Unreleased
+
+**`static_edges` is `ast-grep`, and `pyan3` is gone.** `pyan3` was last released in 2021, needed two
+monkey-patches in `graph.py` to run at all, and still crashed on `networkx` with a third fault. Call
+edges now come from an `ast-grep` walk plus resolution in Python: enclosing scope, then the module's
+imports, then a name defined exactly once in the corpus. Over 400 files it is 10x, 31.5s to 3.2s. It
+also drops the synthetic nodes `pyan3` invented. The node table falls from 19,974 to 4,948, and every
+one that goes was an artefact rather than a definition.
+
+Names reached through an attribute do not resolve by short name any more, `self.m()` excepted. Binding
+`x.get()` to whichever unrelated `get` the corpus happened to hold was producing edges like
+`basics.basic_repr -> xml.FT.list`. Builtins and method names are excluded from the unique-name
+fallback for the same reason. An import statement binds a name rather than using one, so it no longer
+makes an edge.
+
+A third of `pyan3`'s edges are not reproduced, and most of that gap is its own duplication. It copied
+each base-class edge onto every method of the subclass. It pointed constructor calls at
+`Class.__init__`. It emitted self-recursion. The replacements are one class-level edge, the class
+itself, and no self-edge.
+
+**The hand-written `_fast_edges` pass is retired.** The new extractor is 2.3x the "fast" AST path it
+existed to be, and finds twice the edges. `mode='fast'` and `mode='full'` run the same extraction now. `mode='full'` still fans batches out over a process pool. The default runs inline,
+because an incremental sync is a handful of files.
+
+**Extraction fans out over processes.** `_static_batch` is module-level and picklable now. Measured on
+400 files: 4 threads 0.85x against serial, 4 processes 3.25x. The old `threadpool=True` was slower
+than not fanning out at all.
+
+**PageRank on the incremental path was wrong, not stale.** `_centrality(nodes)` narrowed `_pagerank`
+to the changed nodes, which left every other node contributing zero and divided by the size of the
+subset. Over 200 of 59,999 nodes the scores came back 46x inflated with 0/20 top-20 overlap against
+the whole graph. `rank_results` and the "blast radius" advice in the MCP tools read that number.
+PageRank now always scores the whole graph, as a `np.bincount` CSR matvec (3.8x, no new dependency,
+19/20 top-20 overlap with the old maths). Degrees refresh through one `INSERT ... ON CONFLICT`, and
+the PageRank recompute is gated behind a 10% move in the edge count.
+
+**Co-dispatch groups merge.** `_add_dyn` scanned existing groups and broke at the first hit, so a pair
+bridging two groups left them apart: `X = [a, b]` with `Y = (b, c)` gave two groups, not one. It is a
+union-find now.
+
+`ast-grep-py` replaces `pyan3` in the dependencies.
+
 ## 0.1.3
 graph edges bug fix
 

@@ -8,7 +8,7 @@ Docs: https://vedicreader.github.io/kosha/graph.html.md"""
 __all__ = ['CodeGraph', 'dyn_edges', 'static_edges', 'is_symbol_query', 'rank_results', 'is_sys_pkg']
 
 # %% ../nbs/01_graph.ipynb #ff995efe
-import ast, re, os
+import ast, re, os, builtins, numpy as np
 from json import loads as jl
 from collections import defaultdict
 from litesearch.core import database, rrf_merge, rerank_hits
@@ -16,54 +16,25 @@ from litesearch.data import *
 from fastcore.all import (Path, L, patch, groupby, parallel_async, tuplify, first, fdelegates, globtastic, bind, true, dict2obj,
                           listify, filter_keys, in_, chunked, noop, parallel, not_)
 from .core import arun, Kosha, parse, has_init, imp_root, env_pkg_versions, _pkg_name, repo_skip_folder_re,strict_skip_file_re
-from pyan.analyzer import CallGraphVisitor
-from pyan.anutils import Scope, ExecuteInInnerScope
+from ast_grep_py import SgRoot
 from tqdm import tqdm
 
-# %% ../nbs/01_graph.ipynb #eb2b59dfd7c9a091
-try:
-	# Bug 1 fix: auto-register missing nested lambda scopes
-	def _safe_enter(self):
-		o = self.analyzer
-		o.name_stack.append(self.scopename)
-		try: inner_ns = o.get_node_of_current_namespace().get_name()
-		except Exception: inner_ns = '.'.join(o.name_stack)
-		if inner_ns not in o.scopes: o.scopes[inner_ns] = Scope.from_names(self.scopename, [])
-		o.scope_stack.append(o.scopes[inner_ns])
-		o.context_stack.append(self.scopename)
-		self.inner_ns = inner_ns
-		return self
-	ExecuteInInnerScope.__enter__ = _safe_enter
 
-	# Bug 2 fix: guard None namespace in postprocessing
-	_ANON = {'<listcomp>','<setcomp>','<dictcomp>','<genexpr>','<lambda>'}
-	_orig_gp = CallGraphVisitor.get_parent_node
-	def _safe_gp(self, n):
-		if n.namespace is None: return None
-		return _orig_gp(self, n)
-	def _safe_collapse(self):
-		for name in list(self.nodes):
-			if name.partition('.')[0] not in _ANON: continue
-			for n in self.nodes[name]:
-				if n.namespace is None: continue
-				pn = self.get_parent_node(n)
-				if pn is None: continue
-				for n2 in self.uses_edges.get(n, []): self.add_uses_edge(pn, n2)
-				n.defined = False
-	CallGraphVisitor.get_parent_node = _safe_gp
-	CallGraphVisitor.collapse_inner  = _safe_collapse
-except ImportError: pass
+# %% ../nbs/01_graph.ipynb #eb2b59dfd7c9a091
+#: pyan3 was retired here. It was last released in 2021, needed two monkey-patches to run at all,
+#: and resolved call edges by walking `ast` in Python. `static_edges` is ast-grep now.
+
 
 # %% ../nbs/01_graph.ipynb #af482cb1
 class CodeGraph:
-	'''Call graph builder and query engine. Uses pyan3 for static analysis and custom AST parsing for dynamic edges.
+	'''Call graph builder and query engine. Uses ast-grep for static analysis and custom AST parsing for dynamic edges.
 	Stores everything in a SQLite database.
 	'''
 	def __init__(self, path: str | Path = ':memory:'):
 		self.path = path
 		self.db = database(path)
 		ge, gn, cd, fi = self.db.t.graph_edges, self.db.t.graph_nodes, self.db.t.co_dispatch, self.db.t.file_index
-		pa = self.db.t.pending_attr_calls
+		pa, gm = self.db.t.pending_attr_calls, self.db.t.graph_meta
 		pa.create(caller=str, method=str, pkgs=str, if_not_exists=True, pk='caller,method')
 		ge.create(caller=str, callee=str, kind=str, confidence=float, if_not_exists=True, pk=('caller','callee','kind'))
 		gn.create(node=str,flavor=str,file=str,method=str,pagerank=float,in_degree=int,out_degree=int,if_not_exists=True,pk='node')
@@ -71,12 +42,20 @@ class CodeGraph:
 		cd.create(group_id=int, node=str, if_not_exists=True)
 		fi.create(path=str, root=str, source_hash=str, last_analyzed_at=float, if_not_exists=True, pk='path')
 		if 'source_hash' not in fi.columns_dict: fi.add_column('source_hash', str)
+		gm.create(k=str, v=float, if_not_exists=True, pk='k')
 		fi.create_index(['root'], if_not_exists=True)
 		fi.create_index(['source_hash'], if_not_exists=True)
 		gn.create_index(['method'], if_not_exists=True)
-		self.ge, self.gn, self.cd, self.fi, self.pa = ge, gn, cd, fi, pa
+		self.ge, self.gn, self.cd, self.fi, self.pa, self.gm = ge, gn, cd, fi, pa, gm
 
-	def nuke(self): [t.drop() for t in (self.ge, self.gn, self.cd, self.fi)]
+	def _meta(self, k, v=None):
+		'Read `k`, or write `v` to it and return it.'
+		if v is not None: self.gm.insert(dict(k=k, v=v), replace=True); return v
+		r = first(self.gm(where='k=?', where_args=[k]))
+		return r['v'] if r else None
+
+	def nuke(self): [t.drop() for t in (self.ge, self.gn, self.cd, self.fi, self.gm)]
+
 
 # %% ../nbs/01_graph.ipynb #82f10dfa
 _reg_re = re.compile(
@@ -159,18 +138,20 @@ def dyn_edges(src:str, module:str) -> list[dict]:
 	            .map(lambda n: _co_edges(n, module, top)), []))
 
 # %% ../nbs/01_graph.ipynb #f0b09470cf1cdff7
+def _srcs(sources:dict[str,str]=None, filenames:list[str]=None, root:str=None) -> dict:
+	'{module: (source, file)} from either a sources dict or filenames under `root`.'
+	if not filenames: return {m: (s, '') for m, s in (sources or {}).items()}
+	fn = lambda p: '.'.join(Path(p).relative_to(root).with_suffix('').parts)
+	return {fn(p): (Path(p).read_text(errors='replace'), str(p)) for p in filenames}
+
 def _attr_calls(fn): return {c.func.attr for c in ast.walk(fn) if isinstance(c, ast.Call) and
 	isinstance(c.func, ast.Attribute) and isinstance(c.func.value, ast.Attribute) and _root(c.func) == 'self'}
 
 def _attr_call_hints(sources=None, filenames=None, root=None, meta=None) -> list[dict]:
 	'Collect (caller, method, pkgs) for self.attr.method() calls in indexed fn bodies.'
-	if filenames:
-		fn = lambda p: '.'.join(Path(p).relative_to(root).with_suffix('').parts)
-		srcs = {fn(p): Path(p).read_text(errors='replace') for p in filenames}
-	else: srcs = sources or {}
 	meta, hints = meta or {}, []
 	is_mod = lambda mod, n: isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and f'{mod}.{n.name}' in meta
-	for mod, src in srcs.items():
+	for mod, (src, _) in _srcs(sources, filenames, root).items():
 		tree, imp, *_ = parse(src)
 		if tree is None: continue
 		seen = {}
@@ -179,6 +160,7 @@ def _attr_call_hints(sources=None, filenames=None, root=None, meta=None) -> list
 		for fn in L(ast.walk(tree)).filter(lambda n: is_mod(mod, n)):
 			for m in _attr_calls(fn): hints.append({'caller': f'{mod}.{fn.name}', 'method': m, 'pkgs': pkgs})
 	return hints
+
 
 # %% ../nbs/01_graph.ipynb #b455f8af20519012
 @patch
@@ -202,39 +184,102 @@ def resolve_attr_calls(self: CodeGraph) -> 'CodeGraph':
 	return self
 
 # %% ../nbs/01_graph.ipynb #14c0ab3d
-def _build_imap(sources=None, filenames=None, root=None):
-	'Build {module: {local_name: qualified_name}} for resolving None-namespace callee nodes.'
-	if filenames:
-		fn = lambda p: '.'.join(Path(p).relative_to(root).with_suffix('').parts)
-		srcs = {fn(p): Path(p).read_text(errors='replace') for p in filenames}
-	else: srcs = sources or {}
-	return L(set(srcs)).map_dict(lambda m: parse(srcs[m])[-1] or {})
+#: ast-grep node kinds that open a Python scope, and the flavor each becomes.
+_SG_KIND = {'function_definition':'function', 'class_definition':'class'}
+#: `list` and `id` are defined as methods somewhere in most corpora; without this every use of the
+#: builtin binds to whichever one happened to be unique.
+_BUILTIN = frozenset(dir(builtins))
+
+def _sg_scope(n) -> list:
+	'Names of the defs enclosing `n`, outermost first.'
+	out, p = [], n.parent()
+	while p is not None:
+		if p.kind() in _SG_KIND and (nm := p.field('name')): out.append(nm.text())
+		p = p.parent()
+	return out[::-1]
+
+def _in_import(n) -> bool:
+	'True when `n` sits in an import statement, where a name is bound rather than used.'
+	p = n.parent()
+	while p is not None and p.kind() in ('dotted_name','aliased_import'): p = p.parent()
+	return p is not None and p.kind() in ('import_statement','import_from_statement')
+
+def _sg_uses(root, mod:str) -> list:
+	"""(caller, name, on_self) for every name a scope refers to.
+
+	pyan3 emitted a `uses` edge, not a call edge, so a bare reference to a function counts. Names
+	reached through an attribute are dropped unless the receiver is `self`, because resolving
+	`x.get()` by its short name binds to whatever unrelated `get` the corpus happens to hold."""
+	out = []
+	for n in root.find_all(kind='identifier'):
+		p = n.parent()
+		if p is None: continue
+		k = p.kind()
+		if k in _SG_KIND and p.field('name') == n: continue
+		if _in_import(n): continue
+		if k == 'attribute':
+			o = p.field('object')
+			if p.field('attribute') != n or o is None or o.text() != 'self': continue
+			out.append(('.'.join([mod]+_sg_scope(n)), n.text(), True))
+		else: out.append(('.'.join([mod]+_sg_scope(n)), n.text(), False))
+	return out
+
+def _sg_callee(f):
+	'The short name a call node dispatches on: `foo` and `x.foo` both give `foo`.'
+	if f.kind() == 'identifier': return f.text()
+	if f.kind() == 'attribute' and (a := f.field('attribute')): return a.text()
+	return None
+
+def _sg_parse(src:str, mod:str) -> tuple:
+	'Definitions and name uses in `src`, in one ast-grep pass. Returns ({node:flavor}, [(caller,name,on_self)]).'
+	try: root = SgRoot(src, 'python').root()
+	except Exception: return {}, []
+	defs = {}
+	for n in root.find_all(any=[{'kind':k} for k in _SG_KIND]):
+		if not (nm := n.field('name')): continue
+		sc = _sg_scope(n)
+		defs['.'.join([mod]+sc+[nm.text()])] = ('method' if sc and n.kind()=='function_definition'
+		                                        else _SG_KIND[n.kind()])
+	return defs, _sg_uses(root, mod)
+
+def _resolve(mod, caller, nm, on_self, defs, byname, imap):
+	'Bind `nm` used in `caller`: enclosing scopes, then the module imports, then a unique global.'
+	sc = caller[len(mod):].strip('.').split('.') if len(caller) > len(mod) else []
+	for i in range(len(sc), -1, -1):
+		if (q := '.'.join([mod]+sc[:i]+[nm])) in defs: return q
+	if on_self: return None
+	c = byname.get(nm)
+	uniq = c[0] if c and len(c) == 1 else None
+	if (q := imap.get(mod, {}).get(nm)): return _rebase(q, defs) or uniq or q
+	return None if nm in _BUILTIN else uniq
+
+def _rebase(q, defs):
+	'An import says `networkx.algorithms.x`; a corpus rooted lower holds the same node as `algorithms.x`.'
+	p = q.split('.')
+	return first('.'.join(p[i:]) for i in range(len(p)) if '.'.join(p[i:]) in defs)
 
 def static_edges(sources:dict[str,str]=None, filenames:list[str]=None, root:str=None) -> tuple[list[dict], dict]:
-	"Static call edges via pyan3. Provide either filenames+root or sources dict."
+	"Static call edges via ast-grep. Provide either filenames+root or sources dict."
 	assert bool(filenames) ^ bool(sources), 'Provide one of sources or filenames, but not both'
 	if filenames and root is None: root = str(Path(filenames[0]).parent.parent)
-	try:
-		from pyan.analyzer import CallGraphVisitor
-		if filenames: v = CallGraphVisitor(filenames, root=root)
-		else: v = CallGraphVisitor.from_sources(tuplify((s,m) for m,s in sources.items()))
-		v.postprocess()
-		imap = _build_imap(sources=sources, filenames=filenames, root=root)
-		def _callee(c, t):
-			if t.namespace and t.namespace != '*': return f'{t.namespace}.{t.name}'
-			if t.namespace is None:
-				parts = c.namespace.split('.')
-				for i in range(len(parts), 0, -1):
-					if (m:='.'.join(parts[:i])) in imap and t.name in imap[m]: return imap[m][t.name]
-			return None
-		edges = [_e(f'{c.namespace}.{c.name}', cl, 'static', 1.0)
-		         for c,ts in v.uses_edges.items() if c.namespace and c.namespace != '*'
-				 for t in ts if '^^^' not in (t.name or '') and (cl := _callee(c,t))]
-		meta = {f'{n.namespace}.{n.name}': {'node':f'{n.namespace}.{n.name}',
-			'flavor':str(n.flavor).split('.')[-1].lower(),'file':n.filename or ''}
-			for nlist in v.nodes.values() for n in nlist if hasattr(n,'name') and n.namespace}
-		return edges, meta
-	except Exception as ex: print(f"pyan3 static analysis failed: {ex}"); return [], {}
+	srcs = _srcs(sources, filenames, root)
+	defs, calls, meta = {}, [], {}
+	for mod, (src, file) in srcs.items():
+		d, cs = _sg_parse(src, mod)
+		defs |= d
+		calls += [(mod,)+u for u in cs]
+		meta |= {q: {'node':q, 'flavor':f, 'file':file, 'method':q.rsplit('.',1)[-1]} for q, f in d.items()}
+	byname = defaultdict(list)   # module-level defs only: a method is reachable only through an instance
+	for q, f in defs.items():
+		if f != 'method': byname[q.rsplit('.',1)[-1]].append(q)
+	imap = {m: parse(s)[-1] or {} for m, (s, _) in srcs.items()}
+	seen, edges = set(), []
+	for mod, c, nm, on_self in calls:
+		t = _resolve(mod, c, nm, on_self, defs, byname, imap)
+		if t and t != c and (c, t) not in seen:
+			seen.add((c, t)); edges.append(_e(c, t, 'static', 1.0))
+	return edges, meta
+
 
 # %% ../nbs/01_graph.ipynb #617b3082
 def _nodes(db):
@@ -242,52 +287,82 @@ def _nodes(db):
     return L(r['node'] for r in db.q('''SELECT DISTINCT caller node FROM graph_edges
                                      UNION SELECT DISTINCT callee FROM graph_edges'''))
 
-def _pagerank(db, nodes:set=None, alpha=0.85, iters=50, tol=1e-6):
-    'Iterative PageRank with precomputed adjacency — O(E + N·iters).'
-    nodes = nodes or _nodes(db)
-    if not nodes: return {}
-    n = len(nodes)
-    pr = {nd: 1/n for nd in nodes}
-    out,in_e = defaultdict(int), defaultdict(list)
-    for r in db.t.graph_edges(select='caller,callee'):
-	    out[r['caller']] += 1
-	    in_e[r['callee']].append(r['caller'])
+def _edge_arrays(db):
+    'The edge table as (node names, src idxs, dst idxs).'
+    rows = db.q('SELECT caller,callee FROM graph_edges')
+    if not rows: return [], None, None
+    nds = sorted({r['caller'] for r in rows} | {r['callee'] for r in rows})
+    ix = {nd:i for i,nd in enumerate(nds)}
+    src = np.fromiter((ix[r['caller']] for r in rows), np.int32, len(rows))
+    dst = np.fromiter((ix[r['callee']] for r in rows), np.int32, len(rows))
+    return nds, src, dst
+
+def _pagerank(db, alpha=0.85, iters=50, tol=1e-6):
+    'PageRank over the whole edge table: one numpy sparse matvec per iteration.'
+    nds, src, dst = _edge_arrays(db)
+    if not nds: return {}
+    n = len(nds)
+    out = np.bincount(src, minlength=n)[src]
+    pr = np.full(n, 1/n)
     for _ in range(iters):
-	    new = {nd:(1-alpha)/n + alpha*sum(pr.get(c, 0)/(out[c] or 1) for c in in_e[nd]) for nd in nodes}
-	    if max(abs(new[nd]-pr[nd]) for nd in nodes) < tol: break
-	    pr = new
-    return pr
+	    nxt = (1-alpha)/n + alpha*np.bincount(dst, weights=pr[src]/out, minlength=n)
+	    d, pr = np.abs(nxt-pr).max(), nxt
+	    if d < tol: break
+    return dict(zip(nds, pr.tolist()))
+
 
 # %% ../nbs/01_graph.ipynb #e5f3600ee692d5bf
+#: One statement, O(E) in SQLite, so degrees never need a python round-trip.
+_DEG_SQL = '''INSERT INTO graph_nodes(node,in_degree,out_degree)
+SELECT node, SUM(i), SUM(o) FROM (
+  SELECT callee node, 1 i, 0 o FROM graph_edges UNION ALL
+  SELECT caller node, 0 i, 1 o FROM graph_edges) GROUP BY node
+ON CONFLICT(node) DO UPDATE SET in_degree=excluded.in_degree, out_degree=excluded.out_degree'''
+
 @patch
-def _centrality(self: CodeGraph, nodes:set=None):
+def _centrality(self: CodeGraph, nodes:set=None, force=False, tol=0.1):
+	'Refresh degrees; recompute PageRank only once the edge count has moved by more than `tol`.'
 	db = self.db
-	pr = _pagerank(db, nodes)
-	in_d  = {r['nd']:r['n'] for r in db.q('SELECT callee nd,COUNT(*) n FROM graph_edges GROUP BY callee')}
-	out_d = {r['nd']:r['n'] for r in db.q('SELECT caller nd,COUNT(*) n FROM graph_edges GROUP BY caller')}
-	db.t.graph_nodes.insert_all([{'node':nd, 'pagerank':round(pr.get(nd,0),5), 'in_degree':in_d.get(nd,0),
-	                              'out_degree':out_d.get(nd,0)} for nd in set(pr)], upsert=True, pk='node')
+	db.q(_DEG_SQL)
+	n = first(db.q('SELECT COUNT(*) n FROM graph_edges'))['n']
+	base = self._meta('pr_edges')
+	if not (force or not base or abs(n-base) > tol*base): return self
+	pr = _pagerank(db)
+	if pr: db.t.graph_nodes.insert_all([{'node':nd,'pagerank':round(v,5)} for nd,v in pr.items()],
+	                                   upsert=True, pk='node')
+	self._meta('pr_edges', n)
 	return self
+
+def _uf_find(par, x):
+	while par.setdefault(x,x) != x: par[x] = par[par[x]]; x = par[x]
+	return x
+
+def _uf_groups(pairs):
+	'Connected components of `pairs`, so a pair bridging two groups merges them.'
+	par = {}
+	for a,b in pairs:
+		ra, rb = _uf_find(par,a), _uf_find(par,b)
+		if ra != rb: par[ra] = rb
+	g = defaultdict(set)
+	for x in par: g[_uf_find(par,x)].add(x)
+	return list(g.values())
 
 @patch
 def _add_dyn(self:CodeGraph, mod_map:dict):
 	"Add dynamic edges; mod_map values are src strings or Path objects."
 	existing = {(r['caller'],r['callee']) for r in self.db.t.graph_edges(select='caller,callee')}
-	d_edges, groups, new_nodes = [], [], set()
+	d_edges, co, new_nodes = [], [], set()
 	for mod, val in mod_map.items():
 		src = Path(val).read_text(errors='replace') if isinstance(val, os.PathLike) else val
 		for e in dyn_edges(src, mod):
 			fr,t = e['caller'], e['callee']
-			if e['kind'] == 'co_dispatch':
-				for grp in groups:
-					if {fr,t} & grp: grp |= {fr,t}; break
-				else: groups.append({fr,t})
+			if e['kind'] == 'co_dispatch': co.append((fr,t))
 			elif (fr,t) not in existing:
 				d_edges.append(e)
 				existing.add((fr,t))
 			new_nodes |= {fr,t}
 	if d_edges: self.db.t.graph_edges.insert_all(d_edges, upsert=True, pk=('caller','callee','kind'))
-	if groups:
+	if (groups := _uf_groups(co)):
 		base = first(self.db.q('SELECT COALESCE(MAX(group_id)+1,0) n FROM co_dispatch'))['n']
 		self.db.t.co_dispatch.insert_all([{'group_id':base+i,'node':nd} for i,grp in enumerate(groups) for nd in grp])
 	return new_nodes
@@ -301,67 +376,52 @@ def _is_cf(node):
 
 def _lambda_nodes(sources:dict[str,str]=None, filenames:list[str]=None, root:str=None) -> dict:
 	'Extract module-level `name = lambda/partial/bind ...` nodes.'
-	if filenames:
-		fn = lambda p: '.'.join(Path(p).relative_to(root).with_suffix('').parts)
-		sources = {fn(p): (Path(p).read_text(errors='replace'), str(p)) for p in filenames}
-	else: sources = {mod: (src, '') for mod, src in (sources or {}).items()}
 	return {f"{mod}.{t.id}": {'node':f"{mod}.{t.id}", 'flavor':'function', 'file':file}
-			for mod, (src, file) in sources.items()
+			for mod, (src, file) in _srcs(sources, filenames, root).items()
 			for tree, *_ in [parse(src)] if tree
 			for n in tree.body
 			if isinstance(n, ast.Assign)
 			and (isinstance(n.value, ast.Lambda) or _is_cf(n.value))
 			for t in n.targets if isinstance(t, ast.Name)}
-#
-# @patch
-# def _add_static(self:CodeGraph, sources:dict[str,str]=None, filenames:list[str]=None, root:str=None):
-# 	"Add static edges from sources dict. Uses pyan3 for full-corpus analysis."
-# 	s_edges, meta = static_edges(sources=sources, filenames=filenames, root=root)
-# 	meta |= _lambda_nodes(sources=sources, filenames=filenames, root=root)
-# 	hints = _attr_call_hints(sources=sources, filenames=filenames, root=root, meta=meta)
-# 	if s_edges: self.db.t.graph_edges.insert_all(s_edges, upsert=True, pk=('caller','callee','kind'))
-# 	if meta: self.db.t.graph_nodes.insert_all(meta.values(), upsert=True, pk='node')
-# 	if hints: self.pa.insert_all(hints, upsert=True, pk=('caller','method'),ignore=True)
-# 	return set(meta) | set(L(s_edges).attrgot('caller')) | set(L(s_edges).attrgot('callee'))
-#
-# @patch
-# def from_sources(self:CodeGraph, sources:dict[str,str], chunk_size=50):
-# 	'Build from {module_name: source_str}.'
-# 	items, nodes = list(sources.items()), set()
-# 	for ch in tqdm(chunked(items, chunk_size), desc='Processing sources', unit='chunk'):
-# 		nodes |= self._add_static(sources=dict(ch))
-# 	nodes |= self._add_dyn(sources)
-# 	self._centrality(nodes)
-# 	return self.resolve_attr_calls()
+
+def _static_batch(kw:dict) -> tuple:
+	"One batch of files or sources: (meta, edges, attr-call hints). Module-level, so a process pool can pickle it."
+	s_edges, meta = static_edges(**kw)
+	meta |= _lambda_nodes(**kw)
+	return meta, s_edges, _attr_call_hints(**kw, meta=meta)
 
 @patch
 def _add_static(self:CodeGraph, sources:dict[str,str]=None, filenames:list[str]=None, root:str=None):
-	"Add static edges from sources dict. Uses pyan3 for full-corpus analysis."
-	s_edges, meta = static_edges(sources=sources, filenames=filenames, root=root)
-	meta |= _lambda_nodes(sources=sources, filenames=filenames, root=root)
-	hints = _attr_call_hints(sources=sources, filenames=filenames, root=root, meta=meta)
-	return meta, s_edges, hints
+	"Static edges, lambda nodes and attr-call hints for one batch."
+	return _static_batch(dict(sources=sources, filenames=filenames, root=root))
+
+@patch
+def _write_batch(self:CodeGraph, res) -> set:
+	'Persist the (meta, edges, hints) triples a batch pass returned; returns the nodes touched.'
+	nodes = set()
+	for m, e, h in res:
+		if e: self.db.t.graph_edges.insert_all(e, upsert=True, pk=('caller','callee','kind'))
+		if m: self.db.t.graph_nodes.insert_all(m.values(), upsert=True, pk='node')
+		if h: self.pa.insert_all(h, upsert=True, pk=('caller','method'), ignore=True)
+		nodes |= set(m) | set(L(e).attrgot('caller')) | set(L(e).attrgot('callee'))
+	return nodes
 
 @patch
 def from_sources(self:CodeGraph, sources:dict[str,str], chunk_size=50):
 	'Build from {module_name: source_str}.'
-	items, nodes = list(sources.items()), set()
-	res = parallel(lambda p: self._add_static(sources=dict(p)),list(chunked(items,chunk_size)),threadpool=True,progress=True)
-	for (m,e,h) in res:
-		if e: self.db.t.graph_edges.insert_all(e, upsert=True, pk=('caller','callee','kind'))
-		if m: self.db.t.graph_nodes.insert_all(m.values(), upsert=True, pk='node')
-		if h: self.pa.insert_all(h, upsert=True, pk=('caller','method'),ignore=True)
-		nodes |= set(m) | set(L(e).attrgot('caller')) | set(L(e).attrgot('callee'))
+	batches = [dict(sources=dict(c)) for c in chunked(list(sources.items()), chunk_size)]
+	nodes = self._write_batch(parallel(_static_batch, batches, threadpool=False, progress=True))
 	nodes |= self._add_dyn(sources)
 	self._centrality(nodes)
 	return self.resolve_attr_calls()
+
 
 # %% ../nbs/01_graph.ipynb #3150593a339dd430
 @patch
 def process_files(self:CodeGraph,
 	  files,  # list of .py file paths to analyse
 	  root=None,  # package root; auto-detected via __init__.py walk if None
-	  sz=50,  # max files per pyan3 pass; reduce for very large packages
+	  sz=50,  # max files per extraction pass; reduce for very large packages
 ) -> CodeGraph:
 	'Build call-graph edges for the given source files and recompute centrality.'
 	if not files: return self
@@ -369,15 +429,10 @@ def process_files(self:CodeGraph,
 	else:
 		files_by_root = {}
 		for f in files: files_by_root.setdefault(imp_root(f), []).append(f)
-	n, nodes = len(files), set()
+	nodes = set()
 	for r, flist in files_by_root.items():
-		res = parallel(lambda p: self._add_static(filenames=list(p), root=str(r)),list(chunked(flist,sz)),
-		               threadpool=True,progress=True)
-		for (m,e,h) in res:
-			if e: self.db.t.graph_edges.insert_all(e, upsert=True, pk=('caller','callee','kind'))
-			if m: self.db.t.graph_nodes.insert_all(m.values(), upsert=True, pk='node')
-			if h: self.pa.insert_all(h, upsert=True, pk=('caller','method'),ignore=True)
-			nodes |= set(m) | set(L(e).attrgot('caller')) | set(L(e).attrgot('callee'))
+		batches = [dict(filenames=list(c), root=str(r)) for c in chunked(flist, sz)]
+		nodes |= self._write_batch(parallel(_static_batch, batches, threadpool=False, progress=True))
 	fn = lambda p: '.'.join(Path(p).relative_to(root or imp_root(p)).with_suffix('').parts)
 	nodes |= self._add_dyn({fn(p): Path(p) for p in files})
 	self._centrality(nodes)
@@ -386,18 +441,19 @@ def process_files(self:CodeGraph,
 @patch
 @fdelegates(globtastic)
 def from_dir(self:CodeGraph, dir: str | Path, **kwargs) -> 'CodeGraph':
-	'Build from .py files under path — pyan reads files directly.'
+	'Build from .py files under path.'
 	files = dir2files(dir, exts=['.py'], func=os.path.join, **kwargs)
 	return self.process_files(files, Path(dir).parent)
 
 @patch
 @fdelegates(globtastic)
 def from_pkg(self: CodeGraph, pkg: str, **kwargs) -> 'CodeGraph':
-    'Build from an installed package. Uses pyan3 on the package source files.'
+    'Build from an installed package.'
     s = spec(pkg)
     if not s: raise ValueError(f"{pkg!r} not installed")
     p = Path(s.origin).parent if s.origin else Path(s.submodule_search_locations[0])
     return self.from_dir(p, **kwargs)
+
 
 # %% ../nbs/01_graph.ipynb #511f144aaca872f8
 @patch
@@ -1015,50 +1071,13 @@ import hashlib
 
 # %% ../nbs/01_graph.ipynb #9035c5d9
 def _source_hash(src): return hashlib.blake2b(src.encode(), digest_size=16).hexdigest()
-def _fast_defs(tree, mod):
-    out = {}
-    def visit(body, scope):
-        for n in body:
-            if isinstance(n, ast.ClassDef): visit(n.body, f'{scope}.{n.name}')
-            elif isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                name = f'{scope}.{n.name}'
-                out[id(n)] = name
-                visit(n.body, name)
-    visit(tree.body, mod)
-    return out
 
-def _body_calls(fn):
-    calls = []
-    class Visitor(ast.NodeVisitor):
-        def visit_FunctionDef(self, n):
-            if n is fn: self.generic_visit(n)
-        visit_AsyncFunctionDef = visit_FunctionDef
-        def visit_ClassDef(self, n): pass
-        def visit_Call(self, n):
-            calls.append(n)
-            self.generic_visit(n)
-    Visitor().visit(fn)
-    return calls
-
-def _fast_edges(src, mod, filename=''):
-    tree, imp, top, all_fns, imp2mod = parse(src)
-    if tree is None: return {}, [], []
-    names = _fast_defs(tree, mod)
-    local = defaultdict(list)
-    for name in names.values(): local[name.rsplit('.', 1)[-1]].append(name)
-    meta, edges = {}, []
-    for n in ast.walk(tree):
-        if id(n) not in names: continue
-        caller = names[id(n)]
-        meta[caller] = {'node': caller, 'flavor': 'function', 'file': filename, 'method': n.name}
-        for c in _body_calls(n):
-            if not isinstance(c.func, ast.Name): continue
-            targets = local[c.func.id]
-            callee = targets[0] if len(targets) == 1 else imp2mod.get(c.func.id)
-            if callee: edges.append(_e(caller, callee, 'static', 1.0))
-    meta |= _lambda_nodes(sources={mod: src})
-    for row in meta.values(): row['file'], row['method'] = filename, row['node'].rsplit('.', 1)[-1]
-    return meta, edges, _attr_call_hints(sources={mod: src}, meta=meta)
+def _by_root(files, root=None):
+	'{root: [files]} — one group when `root` is given, else grouped by import root.'
+	if root: return {Path(root): list(files)}
+	out = {}
+	for f in files: out.setdefault(imp_root(f), []).append(f)
+	return out
 
 @patch
 def _drop_file(self: CodeGraph, path: str, incoming=True):
@@ -1095,28 +1114,27 @@ def _stale(self: CodeGraph, files, sc=None, force=False):
 
 @patch
 def _fast_process_files(self: CodeGraph, files, root=None, full=False):
-    if not files: return self
-    old = set().union(*(self.file2nodes(str(f)) for f in files))
-    for f in files: self._drop_file(str(f), incoming=False)
-    if full:
-        self.process_files(files, root=root)
-    else:
-        all_edges, hints = [], []
-        for f in files:
-            p = Path(f); src = p.read_text(errors='replace')
-            mod = '.'.join(p.relative_to(root or imp_root(p)).with_suffix('').parts)
-            meta, edges, hs = _fast_edges(src, mod, str(p))
-            if meta: self.db.t.graph_nodes.insert_all(meta.values(), upsert=True, pk='node')
-            all_edges += edges; hints += hs
-        if all_edges: self.db.t.graph_edges.insert_all(all_edges, upsert=True, pk=('caller','callee','kind'))
-        if hints: self.pa.insert_all(hints, upsert=True, pk=('caller','method'), ignore=True)
-        self._add_dyn({'.'.join(Path(f).relative_to(root or imp_root(f)).with_suffix('').parts): Path(f) for f in files})
-        self.resolve_attr_calls()
-    gone = old - set().union(*(self.file2nodes(str(f)) for f in files))
-    if gone:
-        pl = ','.join('?' * len(gone))
-        self.db.q(f'DELETE FROM graph_edges WHERE callee IN ({pl})', list(gone))
-    return self
+	'''Re-extract the changed files in one pass.
+
+	`full` fans the batches out over a process pool, which is what a whole-package build wants. The
+	default runs them here, because an incremental sync is a handful of files and a pool costs more
+	to start than the pass costs to run.'''
+	if not files: return self
+	old = set().union(*(self.file2nodes(str(f)) for f in files))
+	for f in files: self._drop_file(str(f), incoming=False)
+	if full: self.process_files(files, root=root)
+	else:
+		groups = _by_root(files, root)
+		self._write_batch([_static_batch(dict(filenames=[str(f) for f in fl], root=str(r)))
+		                   for r, fl in groups.items()])
+		self._add_dyn({'.'.join(Path(f).relative_to(r).with_suffix('').parts): Path(f)
+		               for r, fl in groups.items() for f in fl})
+		self.resolve_attr_calls()
+	gone = old - set().union(*(self.file2nodes(str(f)) for f in files))
+	if gone:
+		pl = ','.join('?' * len(gone))
+		self.db.q(f'DELETE FROM graph_edges WHERE callee IN ({pl})', list(gone))
+	return self
 
 @patch
 def sync_dir(self: CodeGraph, dir: str | Path, force=False, mode='fast', root=None) -> 'CodeGraph':
@@ -1143,7 +1161,7 @@ def sync_pkgs(self: CodeGraph, pkgs: list[str], force=False, mode='fast') -> 'Co
 
 @patch
 def sync(self: CodeGraph, dir=None, pkgs=None, force=False, mode='fast', metrics=True) -> 'CodeGraph':
-    'Fast incremental graph sync; use mode="full" for pyan3 and metrics=False to defer PageRank.'
+    'Incremental graph sync; mode="full" fans out over processes, metrics=False defers PageRank.'
     self._graph_changed = force
     if force: self.pa.delete_where()
     if dir: self.sync_dir(dir, force=force, mode=mode)
@@ -1154,7 +1172,7 @@ def sync(self: CodeGraph, dir=None, pkgs=None, force=False, mode='fast', metrics
 @patch
 def recompute_metrics(self: CodeGraph) -> 'CodeGraph':
     'Recompute PageRank and degree metrics once after graph updates.'
-    return self._centrality()
+    return self._centrality(force=True)
 
 @patch
 def resolve_attr_calls(self: CodeGraph) -> 'CodeGraph':
@@ -1172,5 +1190,3 @@ def resolve_attr_calls(self: CodeGraph) -> 'CodeGraph':
     if new_edges: self.ge.insert_all(new_edges, upsert=True, pk=('caller','callee','kind'))
     return self
 
-# Default graph sync is intentionally fast; callers can request mode='full'.
-_FAST_GRAPH_MODE = 'fast'
