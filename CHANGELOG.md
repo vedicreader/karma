@@ -2,7 +2,9 @@
 
 <!-- do not remove -->
 
-## Unreleased
+## 0.1.4
+
+removing pyan3 and using ast-grep
 
 **`static_edges` is `ast-grep`, and `pyan3` is gone.** `pyan3` was last released in 2021, needed two
 monkey-patches in `graph.py` to run at all, and still crashed on `networkx` with a third fault. Call
