@@ -32,7 +32,7 @@ k = Kosha()
 k.sync()
 ```
 
-`k.sync(graph=False)` is the shortest refresh when you only need semantic search. `graph_mode='full'` asks for pyan3’s broader static analysis. Pass `graph_metrics=False` when you want to defer PageRank for a large graph refresh.
+`k.sync(graph=False)` skips the call graph. `graph_mode='full'` extracts graph batches in worker processes. `graph_metrics=False` defers PageRank and degree updates; call `k.graph.recompute_metrics()` after the graph updates finish.
 
 ``` python
 k = Kosha()
@@ -154,7 +154,7 @@ results = k.context('search code embeddings', limit=6, graph=True)
 for r in results:
     m = r['metadata']
     print(f"{m['mod_name']}  L{m.get('lineno','?')}  "
-          f"pr={r.get('pagerank',0):.4f}  callers={list(r.get('callers',[]))[:2]}")
+          f"pr={r.get('pagerank') or 0:.4f}  callers={list(r.get('callers',[]))[:2]}")
 ```
 
     chonkie.embeddings.auto.AutoEmbeddings  L13  pr=0.0000  callers=[]

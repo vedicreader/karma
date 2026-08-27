@@ -20,11 +20,6 @@ from ast_grep_py import SgRoot
 from tqdm import tqdm
 
 
-# %% ../nbs/01_graph.ipynb #eb2b59dfd7c9a091
-#: pyan3 was retired here. It was last released in 2021, needed two monkey-patches to run at all,
-#: and resolved call edges by walking `ast` in Python. `static_edges` is ast-grep now.
-
-
 # %% ../nbs/01_graph.ipynb #af482cb1
 class CodeGraph:
 	'''Call graph builder and query engine. Uses ast-grep for static analysis and custom AST parsing for dynamic edges.
@@ -120,8 +115,9 @@ def _delegates_edges(n, mod):
 	is_attr = lambda d: isinstance(d, ast.Attribute) and d.attr == 'delegates'
 	is_del = lambda d: is_call(d) and (is_nm(d.func) or is_attr(d.func))
 	for d in n.decorator_list:
-		if not (is_del(d) and (v:=d.args[0] if d.args else first(d.keywords, lambda kw:kw.arg == 'to'))): continue
-		return [_e(f"{mod}.{n.name}", f"{mod}.{ast.unparse(v)}", 'delegates', 0.85)]
+		if not is_del(d): continue
+		v = first(d.args) or getattr(first(d.keywords, lambda x:x.arg == 'to'), 'value', None)
+		if v: return [_e(f"{mod}.{n.name}", f"{mod}.{ast.unparse(v)}", 'delegates', 0.85)]
 	return []
 
 def dyn_edges(src:str, module:str) -> list[dict]:
@@ -205,11 +201,8 @@ def _in_import(n) -> bool:
 	return p is not None and p.kind() in ('import_statement','import_from_statement')
 
 def _sg_uses(root, mod:str) -> list:
-	"""(caller, name, on_self) for every name a scope refers to.
-
-	pyan3 emitted a `uses` edge, not a call edge, so a bare reference to a function counts. Names
-	reached through an attribute are dropped unless the receiver is `self`, because resolving
-	`x.get()` by its short name binds to whatever unrelated `get` the corpus happens to hold."""
+	"""Return each name used by a scope as `(caller, name, on_self)`.
+	Bare function references count as uses. Attribute names count only when reached through `self`."""
 	out = []
 	for n in root.find_all(kind='identifier'):
 		p = n.parent()
@@ -283,7 +276,7 @@ def static_edges(sources:dict[str,str]=None, filenames:list[str]=None, root:str=
 
 # %% ../nbs/01_graph.ipynb #617b3082
 def _nodes(db):
-    'All node connectors buy caller and callee columns. O(E).'
+    'All nodes named in the caller and callee columns. O(E).'
     return L(r['node'] for r in db.q('''SELECT DISTINCT caller node FROM graph_edges
                                      UNION SELECT DISTINCT callee FROM graph_edges'''))
 
@@ -298,21 +291,23 @@ def _edge_arrays(db):
     return nds, src, dst
 
 def _pagerank(db, alpha=0.85, iters=50, tol=1e-6):
-    'PageRank over the whole edge table: one numpy sparse matvec per iteration.'
+    'PageRank over the complete edge table.'
     nds, src, dst = _edge_arrays(db)
     if not nds: return {}
     n = len(nds)
-    out = np.bincount(src, minlength=n)[src]
+    od = np.bincount(src, minlength=n)
+    out = od[src]
     pr = np.full(n, 1/n)
     for _ in range(iters):
-	    nxt = (1-alpha)/n + alpha*np.bincount(dst, weights=pr[src]/out, minlength=n)
+	    dm = pr[od == 0].sum()
+	    nxt = (1-alpha+alpha*dm)/n + alpha*np.bincount(dst, weights=pr[src]/out, minlength=n)
 	    d, pr = np.abs(nxt-pr).max(), nxt
 	    if d < tol: break
     return dict(zip(nds, pr.tolist()))
 
 
 # %% ../nbs/01_graph.ipynb #e5f3600ee692d5bf
-#: One statement, O(E) in SQLite, so degrees never need a python round-trip.
+#: One O(E) SQLite statement refreshes every degree.
 _DEG_SQL = '''INSERT INTO graph_nodes(node,in_degree,out_degree)
 SELECT node, SUM(i), SUM(o) FROM (
   SELECT callee node, 1 i, 0 o FROM graph_edges UNION ALL
@@ -338,7 +333,7 @@ def _uf_find(par, x):
 	return x
 
 def _uf_groups(pairs):
-	'Connected components of `pairs`, so a pair bridging two groups merges them.'
+	'Connected components of `pairs`.'
 	par = {}
 	for a,b in pairs:
 		ra, rb = _uf_find(par,a), _uf_find(par,b)
@@ -362,9 +357,11 @@ def _add_dyn(self:CodeGraph, mod_map:dict):
 				existing.add((fr,t))
 			new_nodes |= {fr,t}
 	if d_edges: self.db.t.graph_edges.insert_all(d_edges, upsert=True, pk=('caller','callee','kind'))
-	if (groups := _uf_groups(co)):
-		base = first(self.db.q('SELECT COALESCE(MAX(group_id)+1,0) n FROM co_dispatch'))['n']
-		self.db.t.co_dispatch.insert_all([{'group_id':base+i,'node':nd} for i,grp in enumerate(groups) for nd in grp])
+	if co:
+		old = groupby(self.cd(), lambda r:r['group_id'], lambda r:r['node'])
+		co += [(ns[0], n) for ns in old.values() for n in ns[1:]]
+		self.db.q('DELETE FROM co_dispatch')
+		self.cd.insert_all([{'group_id':i,'node':n} for i,g in enumerate(_uf_groups(co)) for n in g])
 	return new_nodes
 
 _cf = frozenset({'partial', 'bind', 'curry'})
@@ -612,34 +609,6 @@ def _stale(self: CodeGraph, files, sc=None) -> list:
 # %% ../nbs/01_graph.ipynb #92f3d9dd0997cbf6
 from tqdm import tqdm
 
-# %% ../nbs/01_graph.ipynb #cd099cdc
-@patch
-def sync_dir(self: CodeGraph, dir: str | Path, force=False) -> 'CodeGraph':
-	'Incremental sync for a directory: drop missing files, update changed files, add new files.'
-	if not dir: print('no action. dir empty'); return self
-	files = dir2files(dir, exts=['.py'], func=os.path.join)
-	known=set(L(self.db.t.file_index(select='distinct path', where='root=?', where_args=[str(dir)])).attrgot('path'))
-	for f in known - set(files): self._drop_file(f)
-	fs = files if force else self._stale(files, str(dir))
-	fs = self._stale(fs, str(dir))
-	if fs: self.process_files(fs, str(dir)) and self._index_files(fs, str(dir))
-	return self
-
-@patch
-def sync_pkgs(self: CodeGraph, pkgs: list[str]) -> 'CodeGraph':
-	'Incremental sync for packages: drop missing files, update changed files, add new files.'
-	if not pkgs: print('no action. pkgs empty'); return self
-	for pkg in tqdm(pkgs, desc='loading code graph for packages', unit='pkg'): self.from_pkg(pkg)
-	return self
-
-@patch
-def sync(self: CodeGraph, dir=None, pkgs=None, force=False) -> 'CodeGraph':
-	'Incremental sync: from_dir per dir, from_pkg per pkg; manage file_index. Centrality recomputed once at the end.'
-	if force: self.pa.delete_where()
-	if dir: self.sync_dir(dir, force)
-	if pkgs: self.sync_pkgs(pkgs)
-	return self
-
 # %% ../nbs/01_graph.ipynb #27493762895c4be6
 @patch(as_prop=True)
 def graph(self: Kosha) -> CodeGraph:
@@ -682,29 +651,31 @@ def short_paths(self:Kosha):
 	'Shortest paths helper: shortest paths between all pairs in top-k nodes.'
 	return self.graph.short_paths
 
-# %% ../nbs/01_graph.ipynb #public_api_graph_aware_a1b2
+# %% ../nbs/01_graph.ipynb #79635765
 @patch
 def public_api(self: Kosha,
-               pkg: str,         # package or module to index (e.g. 'kosha', 'litesearch.data')
-               meta_cols:str='mod_name,docstring', # metadata keys to extract
-               limit: int = 200  # max names to return
-               ) -> L:
-	'Return public API: all public_api=1 entries + @patch-derived methods from the call graph from env and repo stores.'
-	fn = lambda r: r | dict(metadata=jl(r['metadata'])) if isinstance(r.get('metadata'), str) else r
-	_get= lambda r, k: r.get('metadata', {}).get(k)
-	je = lambda o,e='=',v='': 'json_extract(metadata,"$.%s") %s %s'%(o,e,v)
-	p = pkg.split('.')[0]
-	pkg_ = Path(s.origin).parent.name if (s:=spec(p)) else p.replace('-', '_')
-	patch_ = self.ge(select='callee',where="kind='patch' AND caller LIKE ?",where_args=[f'{pkg}.%'])
-	wh, kw = je('public_api',v='1'), dict(where_args=None)
-	if patch_:
-		_ph = '(%s)' % ','.join('?' * len(patch_))
-		wh += ' OR ' + je('mod_name','in',_ph)
-		kw = dict(where_args=L(patch_).attrgot('callee'))
-	_dir_cond = je('dir','like',repr(pkg_))
-	er = self.env_st(where=f"package={pkg_!r} AND ({wh})",limit=limit,**kw)
-	rr = self.code_st(where=f'{_dir_cond} AND {wh}',limit=limit,**kw)
-	return L(er+rr).map(fn).map(lambda r: {m: _get(r,m) for m in meta_cols.split(',')})[:limit]
+               pkg: str,                         # package or module
+               meta_cols: str = 'mod_name,docstring',
+               limit: int = 200) -> L:
+    'Return public API entries, with direct symbols ranked before nested methods.'
+    get = lambda r, k: r.get('metadata', {}).get(k)
+    decode = lambda r: r | dict(metadata=jl(r['metadata'])) if isinstance(r.get('metadata'), str) else r
+    root, prefix = pkg.split('.')[0], f'{pkg}.%'
+    pkg_ = Path(s.origin).parent.name if (s := spec(root)) else root.replace('-', '_')
+    patches = L(self.ge(select='callee',where="kind='patch' AND caller LIKE ?", where_args=[prefix])).attrgot('callee')
+    wh = "(json_extract(metadata, '$.public_api') = 1 AND json_extract(metadata, '$.mod_name') LIKE ?)"
+    args = [prefix]
+    if patches:
+        ph = ','.join('?' * len(patches))
+        wh += f" OR json_extract(metadata, '$.mod_name') IN ({ph})"
+        args += patches
+    n = max(limit * 3, 100)
+    env = self.env_st(where=f"package=? AND ({wh})",where_args=[pkg_] + args,limit=n)
+    repo = self.code_st(where=wh, where_args=args, limit=n)
+    rows = L(env + repo).map(decode)
+    rows = {get(r, 'mod_name'): r for r in rows if get(r, 'mod_name')}
+    rows = L(rows.values()).sorted(key=lambda r: (get(r, 'mod_name') != pkg,get(r, 'mod_name').count('.'), get(r, 'mod_name')))
+    return rows.map(lambda r: {m: get(r, m) for m in meta_cols.split(',')})[:limit]
 
 # %% ../nbs/01_graph.ipynb #e75942176786d92c
 from fastcore.all import not_
@@ -918,160 +889,11 @@ def rank_results(results, query, soft_pkgs=None, top_k=None, penalise_paths=True
     ranked = _rerank_topk(results, scores, top_k or len(results), penalise_paths)
     return L(results[i] | {'_score': s} for i, s in ranked)
 
-# %% ../nbs/01_graph.ipynb #6f57bfb4
-@patch
-def sync(self: Kosha,
-         pkgs=None, # list of package names to sync (e.g. ['httpx', 'fastcore']); if None, sync every stale env package
-         dir=None, # directory to sync; if None, sync all of root
-         verbose=True, # print progress messages
-	         in_parallel=True, # preserve the existing public default; pass False for serialized SQLite graph sync
-	         graph_mode='fast', # use 'full' for pyan3 analysis
-	         graph_metrics=True, # preserve PageRank refresh; pass False to defer it
-         force=False, # ignore file mtimes and reprocess everything, graph included
-         repo=True, # index the repo
-         env=True, # index env packages; False is how you say "this repo only", whatever `pkgs` holds
-         graph=True, # build the call graph — incrementally, unless `force`
-         sync_graph=None, # deprecated: the old name for `graph`
-         pyproject=True, # if True, auto-detect env packages from pyproject.toml; if False, use pkgs argument as-is
-         depth=1, # depth for pyproject env package detection; ignored if pyproject=False
-         embed=True, # whether to embed
-         pkg_parallel=False, # ingest env packages concurrently; requires Kosha(busy_timeout=...)
-         chunk=5_000 # rows per write transaction when pkg_parallel=True
- ) -> 'Kosha':
-	'Sync the code store, the env store and the code graph'
-	if sync_graph is not None: graph = sync_graph
-	if verbose: print(f'Syncing dir={dir or self.root}, repo={repo}, env={env}, graph={graph}, force={force}')
-	dir = dir or self.root
-	pkgs = (listify(pkgs) or list(self.status(pyproject,depth).get('stale_pkgs', {}))) if env else []
-	pkgs = L(pkgs).map(_pkg_name).unique()
-	ts = [bind(self.update_repo, dir, verbose=verbose, force=force, embed=embed) if repo else (lambda: None),
-		  bind(self.update_pkgs, pkgs, verbose=verbose, force=force, embed=embed, parallel=pkg_parallel, chunk=chunk)
-		      if pkgs else (lambda: None),
-		  bind(self.graph.sync, dir=dir if repo else None, pkgs=pkgs, force=force, mode=graph_mode, metrics=graph_metrics) if graph else (lambda: None)]
-
-	if in_parallel: return parallel(lambda f: f(), ts, threadpool=True, progress=True)
-	else: return L(ts).map(lambda f: f())
-
-@patch
-def context(self: Kosha,
-			q: str,               # query with optional key:value filters
-			limit: int = 50,
-			repo: bool = True,
-			env: bool = True,
-			graph: bool = True,
-            boost: bool = True,
-			compact: bool = False, # return slim dicts (mod_name, signature, docstring, lineno) instead of full chunks
-            columns:str='content,metadata',
-            sys_wide=True,
-            rerank: bool = False,     # reorder the boosted top-k with a flashrank cross-encoder
-            rerank_model: str = None, # flashrank model name (None -> fast default)
-			**kw                  # forwarded to env_context / repo_context
-) -> L:
-	'Fan-out semantic search: parse filters, run repo + env searches, merge with chained RRF, then rerank.'
-	# self.update_repo()
-	def _tag(res,pref): return L(res).map(lambda r:r|dict(_source=pref,_src_id=f'{pref}:{r.get("rowid",id(r))}'))
-	# Embed the query exactly once and pass via emb_q= so repo/env don't each re-embed.
-	from kosha.core import parseq
-	raw, fs = parseq(q)
-	if pkg:= fs.get('package', []): repo = False
-	exec_ls = [lambda: self.repo_context(q, emb_q=raw, limit=limit*2, columns=columns, **kw) if repo else noop(),
-	           lambda: self.env_context(q, emb_q=raw, limit=limit*2, columns=columns, sys_wide=sys_wide, **kw) if env else noop()]
-	fn = lambda f: f()
-	rr, er = parallel(fn, exec_ls, threadpool=True) if parallel else L(exec_ls).map(fn)
-	results = L(_tag(rr,'repo'), _tag(er,'env'))
-	if not results: return L()
-	rrf = bind(rrf_merge, limit=limit*2, id_key='_src_id')
-	res = L(L(results[1:]).reduce(lambda m,rs: rrf(m,rs), results[0]))
-	if not res: return L()
-	soft_pkgs = set(pkg) if pkg else set(raw.split()) & set(self.pkgs2consider(sys_wide))
-	ranked = rank_results(res, raw, soft_pkgs=soft_pkgs, top_k=limit) if boost else res
-	# Reranking the boosted top-k only. Widening the pool first measures worse *and* costs
-	# linearly more: pool recall rises (0.42 -> 0.71 going 20 -> 400/leg) but the cross-encoder
-	# cannot surface the target among the extra distractors, so R@10 drops 0.375 -> 0.292.
-	if rerank: ranked = L(rerank_hits(raw, list(ranked), rerank_model, limit))
-	if graph:
-		em = self.graph.node_infos([r['metadata']['mod_name'] for r in ranked])
-		ranked = L(ranked.map(lambda r: r | em.get(r['metadata']['mod_name'], {})))
-	if compact:
-		meta = lambda r: filter_keys(r['metadata'],in_(['mod_name','docstring','lineno','path']))
-		return ranked.map(lambda r:meta(r)|dict(sig=(r['content'].splitlines()[0])))
-	return dict2obj(ranked)
-
-# %% ../nbs/01_graph.ipynb #pkg_deps_task_context_c3d4
-def is_sys_pkg(pkg:str) -> bool:
-	'Return True if pkg is a system-wide package (e.g. in site-packages), False if likely user code.'
-	from importlib.metadata import distribution as dist, PackageNotFoundError
-	try: return bool(dist(pkg))
-	except PackageNotFoundError: return False
-
-@patch
-def dep_stack(self:Kosha, seeds:list=None, depth:int=1, no_sys_pkg=True, allow:list=None) -> list:
-	'BFS over pkg_deps, ordered by coupling strength.'
-	seen, frontier, layers = set(seeds), set(seeds), [list(seeds)]
-	fn=lambda p: p['tgt'] not in seen and (not no_sys_pkg or is_sys_pkg(p['tgt'])) and (not allow or p['tgt'] in allow)
-	for _ in range(depth):
-		if not frontier: break
-		_pl = ','.join('?'*len(frontier))
-		kw = dict(where=f'from_pkg IN ({_pl})', where_args=list(frontier))
-		nxt = set(L(self.env_pd(select='to_pkg tgt,n_modules n',**kw)).filter(fn).attrgot('tgt'))
-		if not nxt: break
-		layers+=[nxt]
-		seen |= nxt
-		frontier = nxt
-	return layers
-
-@patch
-def top_nodes(self:Kosha, pkg:str, k:int=5) -> L:
-	'Top-k public API nodes for pkg ranked by pagerank in the code graph.'
-	mods = self.public_api(pkg, meta_cols='mod_name').attrgot('mod_name')
-	if not mods: return L()
-	pl = ','.join('?'*len(mods))
-	o = self.gn(select='node,pagerank', order_by='pagerank DESC', limit=k, where=f'node IN ({pl})', where_args=mods)
-	return L(o).attrgot('node')
-
-@patch
-def api_call_paths(self:Kosha,
-	from_pkg: str,  # package whose public API is the call source
-	to_pkg: str,    # package whose public API is the call target
-	k: int = 15     # top-k API nodes per package to consider
-) -> dict:
-	'Shortest call-graph paths from from_pkg public API nodes to to_pkg public API nodes.'
-	f,a = self.top_nodes(from_pkg, k), self.top_nodes(to_pkg, k)
-	paths = {}
-	for fp in f: paths = paths | self.graph._bfs(fp, set(a))
-	return filter_keys(paths, in_(a))
-
-# %% ../nbs/01_graph.ipynb #8d82814f
-@patch
-@fdelegates(Kosha.context)
-def where_to_add(self: Kosha, description: str, limit: int = 5, **kwargs) -> L:
-	'Likely insertion points for new code: file + line from top context results + co_dispatched peers.'
-	results = self.context(description, limit=limit, **kwargs)
-	je = lambda v: f"json_extract(metadata,'$.mod_name')={v!r}"
-	fn = lambda r: r | dict(metadata=jl(r['metadata'])) if 'metadata' in r else r
-	locfn = lambda m: dict(path=m.get('path'),lineno=m.get('lineno'),end_lineno=m.get('end_lineno') or m.get('lineno'))
-	def _loc(n):
-		r = L(self.code_st(select='metadata', where=je(n), limit=1)).map(fn)
-		return dict(node=n) | locfn(r[0]['metadata']) if r else {}
-	out, seen = [], set()
-	for r in results:
-		mod = r['metadata'].get('mod_name', '')
-		if not mod or mod in seen: continue
-		seen.add(mod)
-		loc = _loc(mod)
-		if not loc or not loc['path']: continue
-		co = list(r.get('co_dispatched', []))
-		peer_ends = [p['end_lineno'] for c in co if (p := _loc(c)) and p['path'] == loc['path'] and p['end_lineno']]
-		insert_after = max([loc['end_lineno'] or 0] + peer_ends, default=loc['lineno'])
-		out+=[dict(node=mod,path=loc['path'],insert_after=insert_after,co_dispatched=co,pagerank=r.get('pagerank',0))]
-	return L(out)
-
 # %% ../nbs/01_graph.ipynb #82ba7e259675eaad
 import hashlib
 
 # %% ../nbs/01_graph.ipynb #9035c5d9
 def _source_hash(src): return hashlib.blake2b(src.encode(), digest_size=16).hexdigest()
-
 def _by_root(files, root=None):
 	'{root: [files]} — one group when `root` is given, else grouped by import root.'
 	if root: return {Path(root): list(files)}
@@ -1190,3 +1012,147 @@ def resolve_attr_calls(self: CodeGraph) -> 'CodeGraph':
     if new_edges: self.ge.insert_all(new_edges, upsert=True, pk=('caller','callee','kind'))
     return self
 
+
+# %% ../nbs/01_graph.ipynb #6f57bfb4
+@patch
+def sync(self: Kosha,
+         pkgs=None, # list of package names to sync (e.g. ['httpx', 'fastcore']); if None, sync every stale env package
+         dir=None, # directory to sync; if None, sync all of root
+         verbose=True, # print progress messages
+		 in_parallel=True, # preserve the existing public default; pass False for serialized SQLite graph sync
+		 graph_mode='fast', # use 'full' to extract graph batches in worker processes
+		 graph_metrics=True, # preserve PageRank refresh; pass False to defer it
+         force=False, # ignore file mtimes and reprocess everything, graph included
+         repo=True, # index the repo
+         env=True, # index env packages; False is how you say "this repo only", whatever `pkgs` holds
+         graph=True, # build the call graph — incrementally, unless `force`
+         sync_graph=None, # deprecated: the old name for `graph`
+         pyproject=True, # if True, auto-detect env packages from pyproject.toml; if False, use pkgs argument as-is
+         depth=1, # depth for pyproject env package detection; ignored if pyproject=False
+         embed=True, # whether to embed
+         pkg_parallel=False, # ingest env packages concurrently; requires Kosha(busy_timeout=...)
+         chunk=5_000 # rows per write transaction when pkg_parallel=True
+ ) -> 'Kosha':
+	'Sync the code store, the env store and the code graph'
+	if sync_graph is not None: graph = sync_graph
+	if verbose: print(f'Syncing dir={dir or self.root}, repo={repo}, env={env}, graph={graph}, force={force}')
+	dir = dir or self.root
+	pkgs = (listify(pkgs) or list(self.status(pyproject,depth).get('stale_pkgs', {}))) if env else []
+	pkgs = L(pkgs).map(_pkg_name).unique()
+	ts = [bind(self.update_repo, dir, verbose=verbose, force=force, embed=embed) if repo else (lambda: None),
+		  bind(self.update_pkgs, pkgs, verbose=verbose, force=force, embed=embed, parallel=pkg_parallel, chunk=chunk)
+		      if pkgs else (lambda: None),
+		  bind(self.graph.sync, dir=dir if repo else None, pkgs=pkgs, force=force, mode=graph_mode, metrics=graph_metrics) if graph else (lambda: None)]
+	if in_parallel: return parallel(lambda f: f(), ts, threadpool=True, progress=True)
+	else: return L(ts).map(lambda f: f())
+
+@patch
+def context(self: Kosha,
+			q: str,               # query with optional key:value filters
+			limit: int = 50,
+			repo: bool = True,
+			env: bool = True,
+			graph: bool = True,
+            boost: bool = True,
+			compact: bool = False, # return slim dicts (mod_name, signature, docstring, lineno) instead of full chunks
+            columns:str='content,metadata',
+            sys_wide=True,
+            rerank: bool = False,     # reorder the boosted top-k with a flashrank cross-encoder
+            rerank_model: str = None, # flashrank model name (None -> fast default)
+			**kw                  # forwarded to env_context / repo_context
+) -> L:
+	'Fan-out semantic search: parse filters, run repo + env searches, merge with chained RRF, then rerank.'
+	# self.update_repo()
+	def _tag(res,pref): return L(res).map(lambda r:r|dict(_source=pref,_src_id=f'{pref}:{r.get("rowid",id(r))}'))
+	# Embed the query exactly once and pass via emb_q= so repo/env don't each re-embed.
+	from kosha.core import parseq
+	raw, fs = parseq(q)
+	if pkg:= fs.get('package', []): repo = False
+	exec_ls = [lambda: self.repo_context(q, emb_q=raw, limit=limit*2, columns=columns, **kw) if repo else noop(),
+	           lambda: self.env_context(q, emb_q=raw, limit=limit*2, columns=columns, sys_wide=sys_wide, **kw) if env else noop()]
+	fn = lambda f: f()
+	rr, er = parallel(fn, exec_ls, threadpool=True) if parallel else L(exec_ls).map(fn)
+	results = L(_tag(rr,'repo'), _tag(er,'env'))
+	if not results: return L()
+	rrf = bind(rrf_merge, limit=limit*2, id_key='_src_id')
+	res = L(L(results[1:]).reduce(lambda m,rs: rrf(m,rs), results[0]))
+	if not res: return L()
+	soft_pkgs = set(pkg) if pkg else set(raw.split()) & set(self.pkgs2consider(sys_wide))
+	ranked = rank_results(res, raw, soft_pkgs=soft_pkgs, top_k=limit) if boost else res
+	if rerank: ranked = L(rerank_hits(raw, list(ranked), rerank_model, limit))
+	if graph:
+		em = self.graph.node_infos([r['metadata']['mod_name'] for r in ranked])
+		ranked = L(ranked.map(lambda r: r | em.get(r['metadata']['mod_name'], {})))
+	if compact:
+		meta = lambda r: filter_keys(r['metadata'],in_(['mod_name','docstring','lineno','path']))
+		return ranked.map(lambda r:meta(r)|dict(sig=(r['content'].splitlines()[0])))
+	return dict2obj(ranked)
+
+# %% ../nbs/01_graph.ipynb #pkg_deps_task_context_c3d4
+def is_sys_pkg(pkg:str) -> bool:
+	'Return True if pkg is a system-wide package (e.g. in site-packages), False if likely user code.'
+	from importlib.metadata import distribution as dist, PackageNotFoundError
+	try: return bool(dist(pkg))
+	except PackageNotFoundError: return False
+
+@patch
+def dep_stack(self:Kosha, seeds:list=None, depth:int=1, no_sys_pkg=True, allow:list=None) -> list:
+	'BFS over pkg_deps, ordered by coupling strength.'
+	seen, frontier, layers = set(seeds), set(seeds), [list(seeds)]
+	fn=lambda p: p['tgt'] not in seen and (not no_sys_pkg or is_sys_pkg(p['tgt'])) and (not allow or p['tgt'] in allow)
+	for _ in range(depth):
+		if not frontier: break
+		_pl = ','.join('?'*len(frontier))
+		kw = dict(where=f'from_pkg IN ({_pl})', where_args=list(frontier))
+		nxt = set(L(self.env_pd(select='to_pkg tgt,n_modules n',**kw)).filter(fn).attrgot('tgt'))
+		if not nxt: break
+		layers+=[nxt]
+		seen |= nxt
+		frontier = nxt
+	return layers
+
+@patch
+def top_nodes(self:Kosha, pkg:str, k:int=5) -> L:
+	'Top-k public API nodes for pkg ranked by pagerank in the code graph.'
+	mods = self.public_api(pkg, meta_cols='mod_name').attrgot('mod_name')
+	if not mods: return L()
+	pl = ','.join('?'*len(mods))
+	o = self.gn(select='node,pagerank', order_by='pagerank DESC', limit=k, where=f'node IN ({pl})', where_args=mods)
+	return L(o).attrgot('node')
+
+@patch
+def api_call_paths(self:Kosha,
+	from_pkg: str,  # package whose public API is the call source
+	to_pkg: str,    # package whose public API is the call target
+	k: int = 15     # top-k API nodes per package to consider
+) -> dict:
+	'Shortest call-graph paths from from_pkg public API nodes to to_pkg public API nodes.'
+	f,a = self.top_nodes(from_pkg, k), self.top_nodes(to_pkg, k)
+	paths = {}
+	for fp in f: paths = paths | self.graph._bfs(fp, set(a))
+	return filter_keys(paths, in_(a))
+
+# %% ../nbs/01_graph.ipynb #8d82814f
+@patch
+@fdelegates(Kosha.context)
+def where_to_add(self: Kosha, description: str, limit: int = 5, **kwargs) -> L:
+	'Likely insertion points for new code: file + line from top context results + co_dispatched peers.'
+	results = self.context(description, limit=limit, **kwargs)
+	je = lambda v: f"json_extract(metadata,'$.mod_name')={v!r}"
+	fn = lambda r: r | dict(metadata=jl(r['metadata'])) if 'metadata' in r else r
+	locfn = lambda m: dict(path=m.get('path'),lineno=m.get('lineno'),end_lineno=m.get('end_lineno') or m.get('lineno'))
+	def _loc(n):
+		r = L(self.code_st(select='metadata', where=je(n), limit=1)).map(fn)
+		return dict(node=n) | locfn(r[0]['metadata']) if r else {}
+	out, seen = [], set()
+	for r in results:
+		mod = r['metadata'].get('mod_name', '')
+		if not mod or mod in seen: continue
+		seen.add(mod)
+		loc = _loc(mod)
+		if not loc or not loc['path']: continue
+		co = list(r.get('co_dispatched', []))
+		peer_ends = [p['end_lineno'] for c in co if (p := _loc(c)) and p['path'] == loc['path'] and p['end_lineno']]
+		insert_after = max([loc['end_lineno'] or 0] + peer_ends, default=loc['lineno'])
+		out+=[dict(node=mod,path=loc['path'],insert_after=insert_after,co_dispatched=co,pagerank=r.get('pagerank',0))]
+	return L(out)

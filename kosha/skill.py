@@ -84,7 +84,7 @@ The graph fields only appear when `graph=True` (the default for `context`); the 
 
 ## The call graph
 
-`k.graph` is the graph engine itself, built by pyan3 static analysis plus AST parsing for dynamic edges, and it holds more than the `Kosha` shortcuts expose — `k.graph.ranked(k=10, module='fastcore')`, `k.graph.callers`, `k.graph.file2nodes`, `k.graph.co_dispatched`. `doc(k.graph)` lists them.
+`k.graph` is the graph engine itself, built by ast-grep static analysis plus Python AST rules for dynamic edges. It also exposes `k.graph.ranked(k=10, module='fastcore')`, `k.graph.callers`, `k.graph.file2nodes`, and `k.graph.co_dispatched`. `doc(k.graph)` lists the complete API.
 
 Node names are the fully-qualified `mod_name` from a result's metadata. A name that isn't in the graph returns empty rather than raising, so an empty `short_path` means "no path found *or* node not indexed" — check `k.ni(name)` before concluding the code doesn't connect.
 
