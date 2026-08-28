@@ -11,13 +11,13 @@ Kosha keeps a searchable memory of your repository and installed packages. Start
 
 ## Install
 
-kosha is a **dev dependency** — it indexes at development time so AI coding assistants can search it.
+kosha is a dev dependency. It indexes at development time so AI coding assistants can search it.
 
 ``` sh
 uv add --dev kosha
 ```
 
-One-time project setup — installs `SKILL.md` so every agent picks up the skill automatically:
+One-time project setup, which installs `SKILL.md` so every agent picks up the skill automatically:
 
 ``` python
 Kosha(install_skill=True)   # writes .agents/skills/kosha/ and .claude/skills/kosha/
@@ -70,8 +70,9 @@ k.sync(pkgs=['fastcore', 'litesearch'])
 
     syncing files [Path('/Users/71293/code/personal/orgs/kosha/kosha/skill.py')] .....
 
+    parse files from /Users/71293/code/personal/orgs/kosha:   0%|                                                                        | 0/1 [00:00<?, ?it/s]
+    parse files from /Users/71293/code/personal/orgs/kosha: 100%|██████████████████████████████████████████████████████████████| 1/1 [00:00<00:00, 1519.12it/s]
 
-    parse files from /Users/71293/code/personal/orgs/kosha:   0%|                                                                        | 0/1 [00:00<?, ?it/s]parse files from /Users/71293/code/personal/orgs/kosha: 100%|██████████████████████████████████████████████████████████████| 1/1 [00:00<00:00, 1519.12it/s]
 
     loading code graph for packages:   0%|                                                                                              | 0/2 [00:00<?, ?pkg/s]
 
@@ -79,7 +80,10 @@ k.sync(pkgs=['fastcore', 'litesearch'])
     synced repo
 
     loading code graph for packages: 100%|█████████████████████████████████████████████████████████████████████████████████████| 2/2 [00:00<00:00, 100.77pkg/s]
-    Updating packages:  50%|██████████████████████████████████████████████████                                                  | 1/2 [00:00<00:00,  2.57pkg/s]Updating packages: 100%|████████████████████████████████████████████████████████████████████████████████████████████████████| 2/2 [00:00<00:00,  4.46pkg/s]Updating packages: 100%|████████████████████████████████████████████████████████████████████████████████████████████████████| 2/2 [00:00<00:00,  4.01pkg/s]
+
+    Updating packages:  50%|██████████████████████████████████████████████████                                                  | 1/2 [00:00<00:00,  2.57pkg/s]
+    Updating packages: 100%|████████████████████████████████████████████████████████████████████████████████████████████████████| 2/2 [00:00<00:00,  4.46pkg/s]
+    Updating packages: 100%|████████████████████████████████████████████████████████████████████████████████████████████████████| 2/2 [00:00<00:00,  4.01pkg/s]
 
     package {'name': 'fastcore', 'version': '2.2.10'} already loaded.
     updating pkg: litesearch ...
@@ -100,7 +104,7 @@ k.status()
 
 Re-run `k.sync()` after `uv add`, version bumps, or significant code changes. If `stale_files > 0` or `stale_pkgs` is non-empty, sync before querying.
 
-Use `k.sync(embed=False)` to rebuild the call graph on an existing DB without re-embedding — useful after a kosha update that changes graph logic.
+Use `k.sync(embed=False)` to rebuild the call graph on an existing DB without re-embedding, useful after a kosha update that changes graph logic.
 
 ## Search before you write
 
@@ -129,7 +133,7 @@ for r in results:
     fsspec.utils.atomic_write
       def atomic_write(path: str, mode: str = "wb"):
 
-Package names in the query (`package:fastcore`, or a bare package word) are **soft-boosted** — matching results rank higher but other packages still appear. Use `package!:fastcore` to hard-filter to a single package. `path:`, `lang:`, `type:` tokens are hard filters that narrow further:
+Package names in the query (`package:fastcore`, or a bare package word) are **soft-boosted**, matching results rank higher but other packages still appear. Use `package!:fastcore` to hard-filter to a single package. `path:`, `lang:`, `type:` tokens are hard filters that narrow further:
 
 ``` python
 k.env_context('package:fastcore path:xtras atomic save', limit=8)   # boost fastcore, keep others
@@ -164,7 +168,7 @@ for r in results:
     kosha.graph._boost_embedded  L772  pr=0.0001  callers=['kosha.graph._apply_query_boost']
     chonkie.handshakes.elastic.ElasticHandshake.search  L152  pr=0.0000  callers=[]
 
-`pagerank` = blast radius — higher means more things depend on it, touch carefully.
+`pagerank` = blast radius, higher means more things depend on it, touch carefully.
 
 ## Inspect the impact
 
@@ -183,7 +187,7 @@ print('co_dispatched:', list(info.get('co_dispatched', []))[:5])
     callees:  []
     co_dispatched: []
 
-`co_dispatched` lists sibling functions registered together (route groups, handler tables, plugin lists) — the pattern to follow when adding a new one.
+`co_dispatched` lists sibling functions registered together (route groups, handler tables, plugin lists), the pattern to follow when adding a new one.
 
 ## Choose where to make the change
 
@@ -199,7 +203,7 @@ for p in pts:
     /Users/71293/code/personal/orgs/kosha/kosha/core.py:56  (kosha.core.parse)
     /Users/71293/code/personal/orgs/kosha/kosha/graph.py:154  (kosha.graph.dyn_edges)
 
-## Triage — scan many results quickly
+## Triage, scan many results quickly
 
 `compact=True` strips full code bodies and returns slim dicts for fast scanning.
 
@@ -299,7 +303,7 @@ k.graph.ranked(k=5, module='fastcore')
 
     [{'node': 'fastcore.all.L', 'pagerank': 0.00257}, {'node': 'fastcore.all.Path', 'pagerank': 0.00116}, {'node': 'fastcore.all.first', 'pagerank': 0.00056}, {'node': 'fastcore.all.ifnone', 'pagerank': 0.00039}, {'node': 'fastcore.all.patch', 'pagerank': 0.00037}]
 
-## Daemon mode — warm kernel for sessions
+## Daemon mode, warm kernel for sessions
 
 The first kosha call in a process pays a 3–5s embedder cold-start. `kosha daemon` keeps a warm process running and routes JSON requests over stdin/stdout, so subsequent calls are immediate.
 
@@ -319,7 +323,7 @@ Available commands: `sync`, `status`, `context`, `repo_context`, `env_context`, 
 
 ## Live watch mode
 
-Re-index the repo incrementally on every file change (blocking — Ctrl-C to stop):
+Re-index the repo incrementally on every file change (blocking, Ctrl-C to stop):
 
 ``` bash
 kosha watch
@@ -344,7 +348,7 @@ kosha ni "fastcore.basics.merge" # node info
 kosha where-to-add "new route handler"
 kosha public-api fastcore
 kosha api-paths kosha litesearch
-kosha daemon # persistent kernel — warm for all session calls
+kosha daemon # persistent kernel, warm for all session calls
 ```
 
 ## Harness install
@@ -361,9 +365,9 @@ kosha registers as a [pyskill](https://github.com/AnswerDotAI/pyskills) (`kosha.
 
 ## MCP server
 
-`kosha-mcp` exposes the index over the Model Context Protocol, so Claude Code, Claude Desktop, Codex, and any other MCP client can query it directly — `status`/`sync`, `context`/`repo_context`/`env_context`, `node_info`/`short_path`/`api_paths`, `where_to_add`, and more.
+`kosha-mcp` exposes the index over the Model Context Protocol, so Claude Code, Claude Desktop, Codex, and any other MCP client can query it directly, `status`/`sync`, `context`/`repo_context`/`env_context`, `node_info`/`short_path`/`api_paths`, `where_to_add`, and more.
 
-The MCP server ships with kosha (no extra needed). kosha indexes the *current* repo and its venv, so the server must launch from the project root with the project’s environment — `uv run` does both:
+The MCP server ships with kosha (no extra needed). kosha indexes the current repo and its venv, so the server must launch from the project root with the project’s environment, `uv run` does both:
 
 ``` sh
 uv add --dev koshas
@@ -383,7 +387,7 @@ command = "uv"
 args = ["run", "kosha-mcp"]
 ```
 
-**Claude Desktop** (`claude_desktop_config.json` — pin the project explicitly)
+**Claude Desktop** (`claude_desktop_config.json`, pin the project explicitly)
 
 ``` json
 {"mcpServers": {"kosha": {"command": "uv", "args": ["run", "--project", "/path/to/your/repo", "kosha-mcp"]}}}
