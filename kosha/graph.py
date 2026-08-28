@@ -291,9 +291,11 @@ def _edge_arrays(db):
     return nds, src, dst
 
 def _pagerank(db, alpha=0.85, iters=50, tol=1e-6):
-    'PageRank over the complete edge table.'
+    'PageRank over every node'
     nds, src, dst = _edge_arrays(db)
     if not nds: return {}
+    named = set(nds)
+    nds = nds + [r['node'] for r in db.q('SELECT node FROM graph_nodes') if r['node'] not in named]
     n = len(nds)
     od = np.bincount(src, minlength=n)
     out = od[src]
@@ -936,11 +938,7 @@ def _stale(self: CodeGraph, files, sc=None, force=False):
 
 @patch
 def _fast_process_files(self: CodeGraph, files, root=None, full=False):
-	'''Re-extract the changed files in one pass.
-
-	`full` fans the batches out over a process pool, which is what a whole-package build wants. The
-	default runs them here, because an incremental sync is a handful of files and a pool costs more
-	to start than the pass costs to run.'''
+	'Re-extract the changed files in one pass.'
 	if not files: return self
 	old = set().union(*(self.file2nodes(str(f)) for f in files))
 	for f in files: self._drop_file(str(f), incoming=False)
@@ -967,7 +965,7 @@ def sync_dir(self: CodeGraph, dir: str | Path, force=False, mode='fast', root=No
     removed = known - set(files)
     for f in removed: self._drop_file(f)
     changed = self._stale(files, str(dir), force)
-    if changed: self._fast_process_files(changed, str(root or dir), full=mode == 'full'); self._index_files(changed, str(dir))
+    if changed: self._fast_process_files(changed, str(root) if root else None, full=mode == 'full'); self._index_files(changed, str(dir))
     self._graph_changed = getattr(self, '_graph_changed', False) or bool(removed or changed)
     return self
 
