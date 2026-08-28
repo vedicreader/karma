@@ -2,6 +2,9 @@
 
 <!-- do not remove -->
 
+## 0.1.6
+page ranks can be small. bumping rounding error from 5 to 12 
+
 ## 0.1.5
 fixes page rank
 

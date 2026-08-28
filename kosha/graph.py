@@ -325,8 +325,7 @@ def _centrality(self: CodeGraph, nodes:set=None, force=False, tol=0.1):
 	base = self._meta('pr_edges')
 	if not (force or not base or abs(n-base) > tol*base): return self
 	pr = _pagerank(db)
-	if pr: db.t.graph_nodes.insert_all([{'node':nd,'pagerank':round(v,5)} for nd,v in pr.items()],
-	                                   upsert=True, pk='node')
+	if pr: db.t.graph_nodes.insert_all([{'node':nd,'pagerank':round(v,12)} for nd,v in pr.items()], upsert=True, pk='node')
 	self._meta('pr_edges', n)
 	return self
 
