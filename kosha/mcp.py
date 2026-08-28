@@ -1,4 +1,4 @@
-"""MCP server for kosha — repo + package context search and call-graph queries as MCP tools, so Claude, Codex, and any other MCP client can drive the full index.
+"""MCP server for kosha, repo + package context search and call-graph queries as MCP tools, so Claude, Codex, and any other MCP client can drive the full index.
 
 Docs: https://vedicreader.github.io/kosha/mcp.html.md"""
 
