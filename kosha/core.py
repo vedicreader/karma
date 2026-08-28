@@ -11,7 +11,7 @@ Docs: https://vedicreader.github.io/kosha/core.html.md"""
 # %% auto #0
 __all__ = ['repo_skip_folder_re', 'strict_skip_file_re', 'parse', 'repo_root', 'mv_skill_md', 'arun', 'pkg_trans_deps',
            'env_pkg_versions', 'cast_emb', 'Kosha', 'pkg_url', 'pkg_doc', 'has_init', 'imp_root', 'enrich_chunks',
-           'count_imp', 'parseq', 'filt2wh', 'fanout']
+           'count_imp', 'parseq', 'filt2wh', 'fanout', 'code_row']
 
 # %% ../nbs/00_core.ipynb #d979fe142033f158
 import ast, os, re
@@ -496,6 +496,32 @@ async def awatch_repo(self:Kosha, dir:Path=None, **kw):
 def watch_repo(self:Kosha, dir:Path=None, **kw):
 	'Block and watch repo for changes, re-indexing incrementally. Ctrl-C to stop.'
 	arun(self.awatch_repo(dir, **kw))
+
+# %% ../nbs/00_core.ipynb #4a29335aeeff
+def code_row(r:dict,          # a hit from `repo_context` or `env_context`
+             leg:str='repo'   # which index it came from
+) -> AttrDict:
+    'One hit in the flat shape: `source, ref, title, where, text, open`.'
+    m = dict(r.get('metadata') or {})
+    mod, path, ln = m.get('mod_name', ''), m.get('path', ''), m.get('lineno')
+    return AttrDict(source=leg, ref=mod or path, title=mod or (Path(path).name if path else ''),
+                    where=f'{path}:{ln}' if path and ln else (path or mod),
+                    text=(r.get('content') or '')[:600],
+                    open=f'symbol({mod!r})' if mod else f'open {path}')
+
+@patch
+def rows(self:Kosha,
+         q:str,             # query, with kosha's key:value filters
+         limit:int=12,
+         repo:bool=True,    # the repo index
+         env:bool=False,    # the installed-package index
+         **kw               # forwarded to repo_context / env_context
+) -> L:
+    'Code hits in one flat shape, ready to fuse with hits from anywhere else.'
+    out = L()
+    if repo: out += L(self.repo_context(q, limit=limit, **kw)).map(code_row, 'repo')
+    if env:  out += L(self.env_context(q, limit=limit, **kw)).map(code_row, 'env')
+    return out
 
 # %% ../nbs/00_core.ipynb #7841e51bd75c0c1e
 @patch
