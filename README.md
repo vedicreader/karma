@@ -32,7 +32,7 @@ k = Kosha()
 k.sync()
 ```
 
-`k.sync(graph=False)` is the shortest refresh when you only need semantic search. `graph_mode='full'` asks for pyan3’s broader static analysis. Pass `graph_metrics=False` when you want to defer PageRank for a large graph refresh.
+`k.sync(graph=False)` skips the call graph. `graph_mode='full'` extracts graph batches in worker processes. `graph_metrics=False` defers PageRank and degree updates; call `k.graph.recompute_metrics()` after the graph updates finish.
 
 ``` python
 k = Kosha()
@@ -45,7 +45,7 @@ k.sync(pkgs=['fastcore', 'litesearch'])
     Syncing dir=/Users/71293/code/personal/orgs/kosha, repo=True, env=True, graph=True, force=False
     loading pkgs ['fastcore', 'litesearch'] ...
 
-    Updating packages:   0%|                                                                                                            | 0/2 [00:00<?, ?pkg/s]
+    Updating packages:   0%|                                                                                                               | 0/2 [00:00<?, ?pkg/s]
 
     updating pkg: fastcore ...
 
@@ -70,24 +70,26 @@ k.sync(pkgs=['fastcore', 'litesearch'])
 
     syncing files [Path('/Users/71293/code/personal/orgs/kosha/kosha/skill.py')] .....
 
-    parse files from /Users/71293/code/personal/orgs/kosha:   0%|                                                                        | 0/1 [00:00<?, ?it/s]
-    parse files from /Users/71293/code/personal/orgs/kosha: 100%|██████████████████████████████████████████████████████████████| 1/1 [00:00<00:00, 1519.12it/s]
+    parse files from /Users/71293/code/personal/orgs/kosha:   0%|                                                                           | 0/1 [00:00<?, ?it/s]
+    parse files from /Users/71293/code/personal/orgs/kosha: 100%|█████████████████████████████████████████████████████████████████| 1/1 [00:00<00:00, 1310.72it/s]
 
 
-    loading code graph for packages:   0%|                                                                                              | 0/2 [00:00<?, ?pkg/s]
+    loading code graph for packages:   0%|                                                                                                 | 0/2 [00:00<?, ?pkg/s]
 
     {'changed': 0, 'same': 0, 'removed': 0}
     synced repo
 
-    loading code graph for packages: 100%|█████████████████████████████████████████████████████████████████████████████████████| 2/2 [00:00<00:00, 100.77pkg/s]
+    loading code graph for packages: 100%|████████████████████████████████████████████████████████████████████████████████████████| 2/2 [00:00<00:00, 133.39pkg/s]
 
-    Updating packages:  50%|██████████████████████████████████████████████████                                                  | 1/2 [00:00<00:00,  2.57pkg/s]
-    Updating packages: 100%|████████████████████████████████████████████████████████████████████████████████████████████████████| 2/2 [00:00<00:00,  4.46pkg/s]
-    Updating packages: 100%|████████████████████████████████████████████████████████████████████████████████████████████████████| 2/2 [00:00<00:00,  4.01pkg/s]
+    Updating packages:  50%|███████████████████████████████████████████████████▌                                                   | 1/2 [00:00<00:00,  8.73pkg/s]
 
-    package {'name': 'fastcore', 'version': '2.2.10'} already loaded.
+    package {'name': 'fastcore', 'version': '2.2.16'} already loaded.
     updating pkg: litesearch ...
-    package {'name': 'litesearch', 'version': '0.1.24'} already loaded.
+
+    Updating packages: 100%|███████████████████████████████████████████████████████████████████████████████████████████████████████| 2/2 [00:00<00:00,  8.54pkg/s]
+    Updating packages: 100%|███████████████████████████████████████████████████████████████████████████████████████████████████████| 2/2 [00:00<00:00,  8.56pkg/s]
+
+    package {'name': 'litesearch', 'version': '0.1.32'} already loaded.
 
     [None, None, <kosha.graph.CodeGraph object>]
 
@@ -95,9 +97,9 @@ k.sync(pkgs=['fastcore', 'litesearch'])
 k.status()
 ```
 
-    {'files': 4,
-     'packages': 414,
-     'graph_nodes': 10425,
+    {'files': 5,
+     'packages': 498,
+     'graph_nodes': 10623,
      'stale_files': 0,
      'stale_pkgs': {},
      'new_files': 1}
@@ -158,14 +160,14 @@ results = k.context('search code embeddings', limit=6, graph=True)
 for r in results:
     m = r['metadata']
     print(f"{m['mod_name']}  L{m.get('lineno','?')}  "
-          f"pr={r.get('pagerank',0):.4f}  callers={list(r.get('callers',[]))[:2]}")
+          f"pr={r.get('pagerank') or 0:.4f}  callers={list(r.get('callers',[]))[:2]}")
 ```
 
     chonkie.embeddings.auto.AutoEmbeddings  L13  pr=0.0000  callers=[]
-    kosha.core.process_repo  L283  pr=0.0001  callers=['kosha.core.Kosha']
+    kosha.core.process_repo  L283  pr=0.0000  callers=['kosha.core.Kosha']
+    kosha.graph._boost_embedded  L772  pr=0.0000  callers=['kosha.graph._apply_query_boost']
     chonkie.handshakes.pinecone.PineconeHandshake.search  L201  pr=0.0000  callers=[]
     transformers.models.squeezebert.modeling_squeezebert.SqueezeBertModel.set_input_embeddings  L434  pr=0.0000  callers=[]
-    kosha.graph._boost_embedded  L772  pr=0.0001  callers=['kosha.graph._apply_query_boost']
     chonkie.handshakes.elastic.ElasticHandshake.search  L152  pr=0.0000  callers=[]
 
 `pagerank` = blast radius, higher means more things depend on it, touch carefully.
@@ -182,8 +184,8 @@ print('callees: ', list(info.get('callees', []))[:5])
 print('co_dispatched:', list(info.get('co_dispatched', []))[:5])
 ```
 
-    pagerank: 0
-    callers:  []
+    pagerank: None
+    callers:  ['fastcore.script.anno_parser', 'fastcore.script._run_cli']
     callees:  []
     co_dispatched: []
 
@@ -199,9 +201,8 @@ for p in pts:
     if co: print(f'  peers: {co}')
 ```
 
-    /Users/71293/code/personal/orgs/kosha/kosha/graph.py:1034  (kosha.graph._fast_edges)
-    /Users/71293/code/personal/orgs/kosha/kosha/core.py:56  (kosha.core.parse)
     /Users/71293/code/personal/orgs/kosha/kosha/graph.py:154  (kosha.graph.dyn_edges)
+    /Users/71293/code/personal/orgs/kosha/kosha/core.py:56  (kosha.core.parse)
 
 ## Triage, scan many results quickly
 
@@ -234,18 +235,18 @@ for e in api:
     print(f"{name}" + (f'  # {doc}' if doc else ''))
 ```
 
-    fastcore.aio.run_sync  # Run coroutine `coro` to completion from sync code and r
-    fastcore.aio.iter_sync  # Iterate async generator `agen` from sync code
-    fastcore.aio.ctx_sync  # Use async context manager `acm` in a plain `with` block
-    fastcore.aio.athreaded  # Run `f` in a worker thread, awaitably; use as `@athread
-    fastcore.aio.then  # Pipe `x` through each of `fs`, awaiting values as neede
-    fastcore.aio.acache  # Cache results of async function `f`
     fastcore.aio.CachedAwaitable  # Cache the result from an awaitable
-    fastcore.aio.reawaitable  # Wraps the result of an asynchronous function into an ob
+    fastcore.aio.acache  # Cache results of async function `f`
+    fastcore.aio.athreaded  # Run `f` in a worker thread, awaitably; use as `@athread
+    fastcore.aio.ctx_sync  # Use async context manager `acm` in a plain `with` block
+    fastcore.aio.disable_async_magics  # Undo `enable_async_magics` on `ip`
     fastcore.aio.is_async_callable  # Check if `obj` is an async callable, handling `partial`
-    fastcore.aio.to_aiter  # Async yield each item in `items` with `asyncio.sleep(0)
-    fastcore.aio.maybe_aiter  # If `items` already async, return it; otherwise to_aiter
+    fastcore.aio.iter_sync  # Iterate async generator `agen` from sync code
     fastcore.aio.mapa  # Async `map`; apply `f` (sync or async) to `items` (sync
+    fastcore.aio.maybe_aiter  # If `items` already async, return it; otherwise to_aiter
+    fastcore.aio.noopa  # Do nothing (async)
+    fastcore.aio.reawaitable  # Wraps the result of an asynchronous function into an ob
+    fastcore.aio.run_sync  # Run coroutine `coro` to completion from sync code and r
 
 ## Trace a call path
 
@@ -259,12 +260,12 @@ from fastcore.foundation import L
 k.graphdb.t.graph_edges(where='callee like "%litesearch%"')[:2]
 ```
 
-    [{'caller': 'core.database',
-      'callee': 'litesearch.sanskrit.register_sanskrit',
+    [{'caller': 'sanskrit.register_profiles',
+      'callee': 'litesearch.data.register_profile',
       'kind': 'static',
       'confidence': 1.0},
      {'caller': 'sanskrit.register_profiles',
-      'callee': 'litesearch.data.register_profile',
+      'callee': 'litesearch.data.Profile',
       'kind': 'static',
       'confidence': 1.0}]
 
@@ -272,14 +273,14 @@ k.graphdb.t.graph_edges(where='callee like "%litesearch%"')[:2]
 L(k.ni('kosha.core.env_context')['callees']).filter(lambda x: 'search' in x)
 ```
 
-    []
+    ['litesearch.core.rerank_hits', 'litesearch.core.search']
 
 ``` python
 # Shortest call chain between two graph nodes
 k.short_path('kosha.core.env_context', 'litesearch.core.search')
 ```
 
-    []
+    ['kosha.core.env_context', 'litesearch.core.search']
 
 ``` python
 # Public-API → public-API call paths between two packages
@@ -301,7 +302,7 @@ k.dep_stack(seeds=['kosha'], depth=2)
 k.graph.ranked(k=5, module='fastcore')
 ```
 
-    [{'node': 'fastcore.all.L', 'pagerank': 0.00257}, {'node': 'fastcore.all.Path', 'pagerank': 0.00116}, {'node': 'fastcore.all.first', 'pagerank': 0.00056}, {'node': 'fastcore.all.ifnone', 'pagerank': 0.00039}, {'node': 'fastcore.all.patch', 'pagerank': 0.00037}]
+    [{'node': 'fastcore.all.L', 'pagerank': 0.00975}, {'node': 'fastcore.all.Path', 'pagerank': 0.00526}, {'node': 'fastcore.all.first', 'pagerank': 0.00254}, {'node': 'fastcore.all.ifnone', 'pagerank': 0.0013}, {'node': 'fastcore.all.patch', 'pagerank': 0.00129}]
 
 ## Daemon mode, warm kernel for sessions
 

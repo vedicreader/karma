@@ -56,6 +56,8 @@ def sync(
     repo:bool=True,      # index the repo
     env:bool=True,       # index env packages; --no-env is "this repo only", and skips the staleness scan
     graph:bool=True,     # build the call graph
+    graph_mode:str='fast', # use 'full' to extract graph batches in worker processes
+    graph_metrics:bool=True, # update PageRank and degrees; False defers them
     parallel:bool=True,  # run repo, env, and graph sync in parallel
     embed:bool=True,     # embed code chunks (set False for fast metadata-only update)
     force:bool=False,    # re-sync everything, graph included, rather than what changed
@@ -71,7 +73,7 @@ def sync(
     k = Kosha(busy_timeout=busy_timeout)
     pkg_list = _split_pkgs(pkgs) if pkgs else None
     k.sync(dir=dir, pkgs=pkg_list, repo=repo, env=env, graph=graph, in_parallel=parallel, embed=embed,
-           force=force, pkg_parallel=pkg_parallel)
+           graph_mode=graph_mode, graph_metrics=graph_metrics, force=force, pkg_parallel=pkg_parallel)
     s = k.status()
     print(json.dumps(_to_json(s)) if as_json else
           '\n'.join(f'{k2}: {v}' for k2, v in s.items() if k2 != 'stale_pkgs'))

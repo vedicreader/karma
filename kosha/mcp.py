@@ -56,10 +56,12 @@ def status() -> dict:
 
 @mcp.tool()
 def sync(dir:str|None=None, pkgs:list|None=None, embed:bool=True, force:bool=False,
-         repo:bool=True, env:bool=True, graph:bool=True) -> dict:
-    "Sync repo + env packages + call graph into the .kosha/ index. Incremental — only changed files and new package versions re-index. `env=False` is 'this repo only'; `graph=False` skips the call graph, which `ni` and `where_to_add` need. Returns post-sync status."
+         repo:bool=True, env:bool=True, graph:bool=True, graph_mode:str='fast',
+         graph_metrics:bool=True) -> dict:
+    "Sync repo, env packages, and the call graph. `graph=False` skips the graph. `graph_mode='full'` uses worker processes. `graph_metrics=False` defers PageRank and degree updates until `recompute_metrics()`. Returns post-sync status."
     k = _kosha()
-    k.sync(dir=dir, pkgs=pkgs, embed=embed, force=force, repo=repo, env=env, graph=graph)
+    k.sync(dir=dir, pkgs=pkgs, embed=embed, force=force, repo=repo, env=env, graph=graph,
+           graph_mode=graph_mode, graph_metrics=graph_metrics)
     return _jsonable(k.status())
 
 # %% ../nbs/04_mcp.ipynb #1c8111fc

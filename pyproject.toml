@@ -17,7 +17,7 @@ classifiers = [
 ]
 dependencies = [
     "fastprogress>=1.1.6",
-    "pyan3>=2.4.3",
+    "ast-grep-py>=0.39.5",
     "pyskills>=0.0.4",
     "watchfiles>=1.1.1",
     "mcp>=1.2.0",
@@ -57,4 +57,5 @@ dev = [
     "nbdev>=3.0.15",
     "notebook>=7.5.5",
     "slopometer>=0.0.1",
+    "litesearch[full]"
 ]
