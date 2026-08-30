@@ -70,9 +70,8 @@ k.sync(pkgs=['fastcore', 'litesearch'])
 
     syncing files [Path('/Users/71293/code/personal/orgs/kosha/kosha/skill.py')] .....
 
-    parse files from /Users/71293/code/personal/orgs/kosha:   0%|                                                                           | 0/1 [00:00<?, ?it/s]
-    parse files from /Users/71293/code/personal/orgs/kosha: 100%|█████████████████████████████████████████████████████████████████| 1/1 [00:00<00:00, 1310.72it/s]
 
+    parse files from /Users/71293/code/personal/orgs/kosha:   0%|                                                                           | 0/1 [00:00<?, ?it/s]parse files from /Users/71293/code/personal/orgs/kosha: 100%|█████████████████████████████████████████████████████████████████| 1/1 [00:00<00:00, 1310.72it/s]
 
     loading code graph for packages:   0%|                                                                                                 | 0/2 [00:00<?, ?pkg/s]
 
@@ -80,14 +79,12 @@ k.sync(pkgs=['fastcore', 'litesearch'])
     synced repo
 
     loading code graph for packages: 100%|████████████████████████████████████████████████████████████████████████████████████████| 2/2 [00:00<00:00, 133.39pkg/s]
-
     Updating packages:  50%|███████████████████████████████████████████████████▌                                                   | 1/2 [00:00<00:00,  8.73pkg/s]
 
     package {'name': 'fastcore', 'version': '2.2.16'} already loaded.
     updating pkg: litesearch ...
 
-    Updating packages: 100%|███████████████████████████████████████████████████████████████████████████████████████████████████████| 2/2 [00:00<00:00,  8.54pkg/s]
-    Updating packages: 100%|███████████████████████████████████████████████████████████████████████████████████████████████████████| 2/2 [00:00<00:00,  8.56pkg/s]
+    Updating packages: 100%|███████████████████████████████████████████████████████████████████████████████████████████████████████| 2/2 [00:00<00:00,  8.54pkg/s]Updating packages: 100%|███████████████████████████████████████████████████████████████████████████████████████████████████████| 2/2 [00:00<00:00,  8.56pkg/s]
 
     package {'name': 'litesearch', 'version': '0.1.32'} already loaded.
 
